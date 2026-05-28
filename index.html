@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AvinashGPT — AI Coding Assistant</title>
+  <link rel="stylesheet" href="public/style.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.8.0/dist/tabler-icons.min.css" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <div id="app">
+
+    <!-- Sidebar -->
+    <aside id="sidebar">
+      <div class="sidebar-header">
+        <div class="logo">
+          <div class="logo-icon">A</div>
+          <div class="logo-text">
+            <span class="logo-name">AvinashGPT</span>
+            <span class="logo-sub">Coding Assistant</span>
+          </div>
+        </div>
+        <button id="new-chat-btn" title="New chat">
+          <i class="ti ti-plus"></i> New Chat
+        </button>
+      </div>
+
+      <!-- IMPROVED: Chat history list -->
+      <div id="recent-chats-section" style="display:none">
+        <div class="sidebar-section-label">Recent Chats</div>
+        <div id="recent-chats-list"></div>
+      </div>
+
+      <div class="sidebar-section-label">Quick Prompts</div>
+      <div id="quick-list">
+        <button class="quick-item" data-prompt="Write a Python function to flatten a nested list with type hints and docstring">
+          <i class="ti ti-brand-python"></i> Python snippet
+        </button>
+        <button class="quick-item" data-prompt="Write a React functional component for a debounced search bar using TypeScript">
+          <i class="ti ti-brand-react"></i> React component
+        </button>
+        <button class="quick-item" data-prompt="Write a SQL query to find duplicate records in a table based on email column">
+          <i class="ti ti-database"></i> SQL query
+        </button>
+        <button class="quick-item" data-prompt="Write a PySpark job to read Parquet from S3 and write to Delta Lake with error handling">
+          <i class="ti ti-bolt"></i> PySpark job
+        </button>
+        <button class="quick-item" data-prompt="Write a Docker Compose file for a Node.js app with PostgreSQL and Redis">
+          <i class="ti ti-brand-docker"></i> Docker Compose
+        </button>
+        <button class="quick-item" data-prompt="Explain async/await in JavaScript with a real-world fetch example">
+          <i class="ti ti-brand-javascript"></i> JS async/await
+        </button>
+        <button class="quick-item" data-prompt="Write a REST API in Node.js with Express for a user CRUD with validation">
+          <i class="ti ti-api"></i> REST API
+        </button>
+        <button class="quick-item" data-prompt="Write a Bash script to monitor disk usage and send an alert if over 80%">
+          <i class="ti ti-terminal"></i> Bash script
+        </button>
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="sidebar-stack-label">Stack</div>
+        <div class="stack-tags">
+          <span class="tag">Python</span><span class="tag">Java</span><span class="tag">JS/TS</span>
+          <span class="tag">React</span><span class="tag">SQL</span><span class="tag">PySpark</span>
+          <span class="tag">Docker</span><span class="tag">Go</span><span class="tag">Rust</span>
+          <span class="tag">C++</span><span class="tag">Swift</span><span class="tag">Kotlin</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Chat -->
+    <main id="main">
+      <header id="topbar">
+        <button id="sidebar-toggle" aria-label="Toggle sidebar"><i class="ti ti-menu-2"></i></button>
+        <div class="topbar-center">
+          <div class="status-dot" id="status-dot"></div>
+          <span id="status-text">AvinashGPT is online</span>
+        </div>
+        <!-- IMPROVED: Model selector -->
+        <select id="model-select" title="Select model">
+          <option value="meta-llama/llama-4-scout-17b-16e-instruct">Llama-4 Scout (vision)</option>
+          <option value="llama-3.3-70b-versatile">Llama-3.3 70B (text)</option>
+          <option value="llama-3.1-8b-instant">Llama-3.1 8B (fast)</option>
+        </select>
+        <!-- IMPROVED: Theme toggle -->
+        <button id="theme-toggle" title="Toggle theme"><i class="ti ti-sun"></i></button>
+        <button id="api-key-btn" title="Set API key"><i class="ti ti-key"></i></button>
+        <button id="export-btn" title="Export chat"><i class="ti ti-download"></i></button>
+        <button id="clear-btn" title="Clear chat"><i class="ti ti-trash"></i></button>
+      </header>
+
+      <!-- IMPROVED: Drag-and-drop overlay -->
+      <div id="drop-overlay">
+        <i class="ti ti-upload"></i>
+        <p>Drop file here</p>
+      </div>
+
+      <div id="messages" role="log" aria-live="polite"></div>
+
+      <!-- IMPROVED: Scroll to bottom button -->
+      <button id="scroll-bottom-btn" aria-label="Scroll to bottom"><i class="ti ti-arrow-down"></i></button>
+
+      <div id="input-area">
+        <div id="preview-area" style="display:none"></div>
+        <div id="input-box">
+          <button id="upload-btn" title="Attach file" aria-label="Attach file">
+            <i class="ti ti-paperclip"></i>
+          </button>
+          <input type="file" id="file-input" style="display:none" accept="image/*,.pdf,.txt,.py,.js,.ts,.java,.sql,.csv,.json,.xml,.yaml,.md,.html,.css,.cpp,.go,.rs,.sh" />
+          <textarea
+            id="user-input"
+            placeholder="Ask me to write, debug, or explain any code..."
+            rows="1"
+            aria-label="Message input"
+          ></textarea>
+          <button id="send-btn" aria-label="Send">
+            <i class="ti ti-arrow-up"></i>
+          </button>
+        </div>
+        <!-- IMPROVED: Character counter -->
+        <div id="input-footer">
+          <span id="char-counter">0 / 4000</span>
+          <span id="footer-note">AvinashGPT · Powered by Groq</span>
+        </div>
+      </div>
+    </main>
+
+  </div>
+
+  <!-- IMPROVED: API key modal -->
+  <div id="api-key-modal" class="modal-overlay" style="display:none">
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title">API Key Required</div>
+        <button class="modal-close" onclick="closeApiKeyModal()"><i class="ti ti-x"></i></button>
+      </div>
+      <div class="modal-body">
+        <p>Enter your <strong>Groq API key</strong> to use AvinashGPT.</p>
+        <p style="color:var(--text-muted);font-size:12px;margin:4px 0 10px;">Get one at <a href="https://console.groq.com/keys" target="_blank" style="color:var(--accent)">console.groq.com/keys</a></p>
+        <input type="password" id="api-key-input" placeholder="gsk_..." style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid var(--border-hover);background:var(--bg-input);color:var(--text-primary);font-family:var(--font-sans);font-size:13px;" />
+        <div id="api-key-error" style="color:#f87171;font-size:12px;margin-top:4px;display:none">Please enter a valid API key.</div>
+      </div>
+      <div class="modal-footer">
+        <button class="modal-btn modal-btn-secondary" onclick="closeApiKeyModal()">Cancel</button>
+        <button class="modal-btn modal-btn-primary" onclick="saveApiKey()">Save Key</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- IMPROVED: Lightbox for images -->
+  <div id="lightbox" class="modal-overlay" style="display:none" onclick="closeLightbox()">
+    <img id="lightbox-img" src="" alt="" />
+  </div>
+
+  <script src="public/app.js"></script>
+</body>
+</html>
