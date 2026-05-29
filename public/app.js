@@ -42,13 +42,72 @@ Always end complex answers (multi-step, debugging, architecture) with:
 
 Keep responses focused, well-structured, and formatted for developer readability.`;
 
+const AGENT_SYSTEM_PROMPT = `You are AvinashGPT in AGENT MODE — an autonomous AI assistant.
+
+You have access to tools you can call:
+
+1. web_search(query) — Search the internet for current info, docs, news, package versions.
+2. read_file(filename, content) — Analyze a file the user has attached (content is provided).
+3. write_file(filename, content) — Generate a complete file for the user to download.
+4. run_code(language, code) — Show code to run, with expected output explained.
+5. open_url(url) — Fetch and read the content of any webpage. Use this to read documentation, articles, GitHub repos, or any URL the user mentions.
+
+AGENT BEHAVIOR:
+- When you need current info, use web_search.
+- When user attaches files, use read_file to analyze them.
+- Think step by step. Plan before acting.
+- After using a tool, show the result clearly and continue.
+- Be autonomous — just use tools when needed.
+
+TO USE A TOOL, respond with this exact format:
+<tool_call>
+{"tool": "web_search", "query": "your search query"}
+</tool_call>
+
+TOOL FORMATS:
+- web_search: {"tool": "web_search", "query": "search terms..."}
+- read_file:  {"tool": "read_file", "filename": "file.txt", "content": "file contents..."}
+- write_file: {"tool": "write_file", "filename": "output.py", "content": "full file content..."}
+- run_code:   {"tool": "run_code", "language": "python", "code": "# code here..."}
+- open_url:   {"tool": "open_url", "url": "https://example.com"}
+
+After a tool result is shown, continue with your analysis.
+
+FORMATTING: Same as normal mode — code blocks, numbered steps, Key Takeaway at end.`;
+
 /* ─── State ─── */
 let conversationHistory = [];
 let isLoading = false;
-let currentAttachment = null;
+let currentAttachments = [];
 let lastUserMessage = ''; // IMPROVED: For regenerate
 let lastUserBubbleHtml = ''; // IMPROVED: For regenerate
 let currentChatId = null; // IMPROVED: For chat history
+let agentMode = false;
+let enabledTools = new Set(['web_search', 'read_file', 'write_file', 'run_code', 'open_url']);
+let pyodideInstance = null;
+
+/* ─── Memory helpers ─── */
+function getMemories() { return JSON.parse(localStorage.getItem('avinash_memories') || '[]'); }
+function saveMemories(arr) { localStorage.setItem('avinash_memories', JSON.stringify(arr)); }
+function addMemory(content, category, source) {
+  let arr = getMemories();
+  if (arr.length >= 100) {
+    const unpinned = arr.filter(m => !m.pinned);
+    if (unpinned.length) {
+      unpinned.sort((a, b) => a.timestamp - b.timestamp);
+      arr = arr.filter(m => m.id !== unpinned[0].id);
+    }
+  }
+  arr.push({ id: 'mem_' + Math.random().toString(36).slice(2, 8), content, category, source, timestamp: Date.now(), pinned: false });
+  saveMemories(arr);
+  updateMemoryBadge();
+}
+function deleteMemory(id) {
+  let arr = getMemories().filter(m => m.id !== id);
+  saveMemories(arr);
+  updateMemoryBadge();
+}
+function clearAllMemories() { localStorage.removeItem('avinash_memories'); updateMemoryBadge(); }
 
 /* ─── DOM refs ─── */
 const messagesEl  = document.getElementById('messages');
@@ -58,7 +117,7 @@ const clearBtn    = document.getElementById('clear-btn');
 const newChatBtn  = document.getElementById('new-chat-btn');
 const sidebarEl   = document.getElementById('sidebar');
 const toggleBtn   = document.getElementById('sidebar-toggle');
-const apiKeyBtn   = document.getElementById('api-key-btn');
+// api-key-btn removed — managed via Settings modal
 const uploadBtn   = document.getElementById('upload-btn');
 const fileInput   = document.getElementById('file-input');
 const previewArea = document.getElementById('preview-area');
@@ -72,10 +131,211 @@ const scrollBtn   = document.getElementById('scroll-bottom-btn'); // IMPROVED
 const dropOverlay = document.getElementById('drop-overlay'); // IMPROVED
 const lightbox    = document.getElementById('lightbox');     // IMPROVED
 const lightboxImg = document.getElementById('lightbox-img'); // IMPROVED
+const agentToggle = document.getElementById('agent-mode-toggle');
+const agentToolsList = document.getElementById('agent-tools-list');
+const agentStatusBar = document.getElementById('agent-status-bar');
+const agentStatusText = document.getElementById('agent-status-text');
 
-/* ─── API key management (IMPROVED: modal-based) ─── */
+/* ─── Agent Mode ─── */
+agentToggle?.addEventListener('change', () => {
+  agentMode = agentToggle.checked;
+  agentToolsList.style.display = agentMode ? 'flex' : 'none';
+  agentStatusBar.style.display = agentMode ? 'flex' : 'none';
+  document.querySelectorAll('.agent-only').forEach(el => {
+    el.style.display = agentMode ? 'flex' : 'none';
+  });
+  inputEl.placeholder = agentMode
+    ? 'Ask me to search the web, analyze files, write code...'
+    : 'Ask me to write, debug, or explain any code...';
+  document.getElementById('footer-note').textContent = agentMode
+    ? 'AvinashGPT · Agent Mode'
+    : 'AvinashGPT · Powered by Groq';
+  updateAgentBadges();
+});
+
+document.querySelectorAll('.tool-chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    const tool = chip.dataset.tool;
+    chip.classList.toggle('active');
+    if (chip.classList.contains('active')) enabledTools.add(tool);
+    else enabledTools.delete(tool);
+    updateAgentBadges();
+  });
+});
+
+function updateAgentBadges() {
+  const badgeEl = document.getElementById('agent-tool-badges');
+  if (!badgeEl) return;
+  badgeEl.innerHTML = [...enabledTools].map(t => {
+    const icons = { web_search: 'ti-world-search', read_file: 'ti-file-search', write_file: 'ti-file-pencil', run_code: 'ti-terminal-2', open_url: 'ti-world-www' };
+    const labels = { web_search: 'Web', read_file: 'Read', write_file: 'Write', run_code: 'Code', open_url: 'URL' };
+    return '<span class="agent-badge"><i class="ti ' + icons[t] + '"></i>' + labels[t] + '</span>';
+  }).join('');
+}
+
+/* ─── Tool Execution ─── */
+async function executeTool(toolCall) {
+  const tool = toolCall.tool;
+
+  if (tool === 'web_search') {
+    const query = toolCall.query || '';
+    addToolBubble('web_search', 'Searching: "' + query + '"');
+    agentStatusText.textContent = 'Searching: "' + query + '"';
+    try {
+      const tavilyKey = localStorage.getItem('tavily_api_key');
+      if (tavilyKey) {
+        const res = await fetch('https://api.tavily.com/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ api_key: tavilyKey, query: query, search_depth: 'basic', max_results: 5 })
+        });
+        const data = await res.json();
+        if (data.results && data.results.length) {
+          const result = data.results.map(r => 'Title: ' + (r.title || '') + '\nURL: ' + (r.url || '') + '\nSnippet: ' + (r.content || '') + '\n').join('\n');
+          return { tool, query, result };
+        }
+      }
+      const url = 'https://api.duckduckgo.com/?q=' + encodeURIComponent(query) + '&format=json&no_html=1&skip_disambig=1';
+      const res = await fetch(url);
+      const data = await res.json();
+      const abstract = data.AbstractText || '';
+      const related = (data.RelatedTopics || []).slice(0, 3).map(t => t.Text || t.Result || '').filter(Boolean).join('\n');
+      const answer = data.Answer || '';
+      const result = [answer, abstract, related].filter(Boolean).join('\n\n') || ('Search attempted for "' + query + '". Using model knowledge.');
+      return { tool, query, result };
+    } catch (e) {
+      return { tool, query, result: 'Search attempted. Using model\'s training knowledge.' };
+    }
+  }
+
+  if (tool === 'read_file') {
+    addToolBubble('read_file', 'Reading: "' + toolCall.filename + '"');
+    return { tool, filename: toolCall.filename, result: toolCall.content || 'File content provided in conversation.' };
+  }
+
+  if (tool === 'write_file') {
+    addToolBubble('write_file', 'Writing: "' + toolCall.filename + '"');
+    const blob = new Blob([toolCall.content || ''], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = toolCall.filename; a.click();
+    URL.revokeObjectURL(url);
+    return { tool, filename: toolCall.filename, result: 'File "' + toolCall.filename + '" has been created and downloaded.' };
+  }
+
+  if (tool === 'run_code') {
+    const language = toolCall.language || 'python';
+    const code = toolCall.code || '';
+    addToolBubble('run_code', 'Executing ' + language + ' code...');
+    agentStatusText.textContent = 'Running ' + language + '...';
+    try {
+      if (language === 'javascript' || language === 'js') {
+        let result = String(eval(code));
+        return { tool, language, result: result || 'Code executed (no return value).' };
+      }
+      if (!pyodideInstance) {
+        addToolBubble('run_code', 'Loading Python runtime...');
+        pyodideInstance = await loadPyodide();
+      }
+      pyodideInstance.runPython('import sys, io; sys.stdout = io.StringIO()');
+      await pyodideInstance.runPythonAsync(code);
+      let output = pyodideInstance.runPython('sys.stdout.getvalue()');
+      return { tool, language, result: output || 'Code executed (no output).' };
+    } catch (e) {
+      return { tool, language, result: 'Error: ' + e.message };
+    }
+  }
+
+  if (tool === 'open_url') {
+    const url = toolCall.url || '';
+    addToolBubble('open_url', 'Fetching: ' + url);
+    agentStatusText.textContent = 'Fetching URL...';
+    try {
+      const res = await fetch('https://r.jina.ai/' + url);
+      let text = await res.text();
+      if (text.length > 3000) text = text.substring(0, 3000) + '\n...[truncated]';
+      return { tool, url, result: text || 'Page content is empty.' };
+    } catch (e) {
+      return { tool, url, result: 'Error fetching URL: ' + e.message };
+    }
+  }
+
+  return { tool, result: 'Unknown tool.' };
+}
+
+function addToolBubble(tool, message) {
+  const icons = { web_search: '🔍', read_file: '📂', write_file: '💾', run_code: '⚡', open_url: '🌐' };
+  const div = document.createElement('div');
+  div.className = 'tool-call-bubble';
+  div.innerHTML = '<span class="tool-call-icon">' + (icons[tool] || '🔧') + '</span><span class="tool-call-text">' + escapeHtml(message) + '</span><span class="tool-call-spinner"></span>';
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return div;
+}
+
+function resolveToolBubble(bubble) {
+  if (!bubble) return;
+  var spinner = bubble.querySelector('.tool-call-spinner');
+  if (spinner) spinner.remove();
+  bubble.innerHTML += '<span class="tool-call-done"> Done</span>';
+}
+
+function parseToolCall(text) {
+  var match = text.match(/<tool_call>([\s\S]*?)<\/tool_call>/);
+  if (!match) return null;
+  try {
+    return JSON.parse(match[1].trim());
+  } catch (e) {
+    return null;
+  }
+}
+
+/* ─── Settings defaults ─── */
+const DEFAULT_SYSTEM_PROMPT = `You are AvinashGPT, an expert AI coding assistant built by Avinash Kumar.
+
+PERSONALITY:
+- Calm, precise, senior-engineer tone — like doing a code review.
+- Think step-by-step before writing any code or fix.
+- If something is ambiguous, ask ONE clarifying question first.
+- Never guess or hallucinate APIs / methods.
+
+CODE GENERATION RULES:
+- Write clean, production-ready code with meaningful variable names.
+- Add inline comments for non-obvious logic.
+- Follow language conventions: PEP8 for Python, camelCase for JS/TS, snake_case for Go/Rust.
+- Structure code: imports → config/constants → helper functions → main logic → output/exports.
+
+FORMATTING RULES:
+- Always wrap code in fenced code blocks with the correct language label.
+- For multi-step answers, use numbered steps with clear section headings.
+- Keep explanations concise but complete — no fluff, no over-explanation.
+- Use inline \`code\` for variable names, function names, and short expressions in prose.
+
+RESPONSE ENDING:
+Always end complex answers with:
+💡 Key Takeaway: [one concise sentence summarizing the most important point]`;
+
+const SETTINGS_DEFAULTS = {
+  maxTokens: 1500,
+  agentLoopLimit: 5,
+  fontSize: 14,
+  density: 'comfortable',
+  customSystemPrompt: ''
+};
+
+function getSettings() {
+  try {
+    return Object.assign({}, SETTINGS_DEFAULTS, JSON.parse(localStorage.getItem('avinash_settings') || '{}'));
+  } catch { return { ...SETTINGS_DEFAULTS }; }
+}
+
+function saveSettingsToStorage(obj) {
+  localStorage.setItem('avinash_settings', JSON.stringify(obj));
+}
+
+/* ─── API key management ─── */
 function getApiKey() {
-  let key = localStorage.getItem('groq_api_key');
+  const key = localStorage.getItem('groq_api_key');
   if (!key) {
     document.getElementById('api-key-modal').style.display = 'flex';
     return null;
@@ -83,52 +343,243 @@ function getApiKey() {
   return key;
 }
 
-window.saveApiKey = function() {
-  const input = document.getElementById('api-key-input');
+window.saveQuickApiKey = function() {
+  const input = document.getElementById('quick-api-key-input');
   const key = input.value.trim();
   if (!key || !key.startsWith('gsk_')) {
-    document.getElementById('api-key-error').style.display = 'block';
+    document.getElementById('quick-api-key-error').style.display = 'block';
     return;
   }
-  document.getElementById('api-key-error').style.display = 'none';
+  document.getElementById('quick-api-key-error').style.display = 'none';
   localStorage.setItem('groq_api_key', key);
   closeApiKeyModal();
-  addMessage('bot', '<span style="color:#86efac;">✓ API key saved.</span>');
+  addMessage('bot', '<span style="color:#86efac;">✓ API key saved. You\'re all set!</span>');
 };
 
 window.closeApiKeyModal = function() {
   document.getElementById('api-key-modal').style.display = 'none';
 };
 
-apiKeyBtn.addEventListener('click', () => {
-  const existing = localStorage.getItem('groq_api_key');
-  if (existing) {
-    document.getElementById('api-key-input').value = existing;
-  }
-  document.getElementById('api-key-modal').style.display = 'flex';
-});
-
-// Check for key on load
 window.addEventListener('load', () => {
   if (!localStorage.getItem('groq_api_key')) {
-    setTimeout(() => document.getElementById('api-key-modal').style.display = 'flex', 300);
+    setTimeout(() => { const m = document.getElementById('api-key-modal'); if (m) m.style.display = 'flex'; }, 300);
   }
 });
 
-/* ─── Theme toggle (IMPROVED) ─── */
-function loadTheme() {
-  const theme = localStorage.getItem('theme') || 'dark';
-  if (theme === 'light') {
+/* ─── Settings Modal ─── */
+window.openSettings = function() {
+  const s = getSettings();
+  // Populate API keys
+  document.getElementById('api-key-input').value = localStorage.getItem('groq_api_key') || '';
+  document.getElementById('tavily-key-input').value = localStorage.getItem('tavily_api_key') || '';
+
+  // Model cards
+  const currentModel = modelSelect?.value || 'meta-llama/llama-4-scout-17b-16e-instruct';
+  document.querySelectorAll('.model-card').forEach(card => {
+    card.classList.toggle('active', card.dataset.model === currentModel);
+  });
+
+  // Sliders
+  document.getElementById('max-tokens-slider').value = s.maxTokens;
+  document.getElementById('max-tokens-val').textContent = s.maxTokens;
+  document.getElementById('agent-loop-slider').value = s.agentLoopLimit;
+  document.getElementById('agent-loop-val').textContent = s.agentLoopLimit;
+  document.getElementById('font-size-slider').value = s.fontSize;
+  document.getElementById('font-size-val').textContent = s.fontSize + 'px';
+
+  // Theme cards
+  const currentTheme = localStorage.getItem('theme') || 'dark';
+  document.querySelectorAll('.theme-card').forEach(c => c.classList.toggle('active', c.dataset.theme === currentTheme));
+
+  // Density
+  document.querySelectorAll('.density-card').forEach(c => c.classList.toggle('active', c.dataset.density === s.density));
+
+  // Agent tool toggles — sync with enabledTools
+  ['web_search','read_file','write_file','run_code','open_url'].forEach(t => {
+    const el = document.getElementById('tool-' + t);
+    if (el) el.checked = enabledTools.has(t);
+  });
+
+  // System prompt
+  const promptEl = document.getElementById('custom-system-prompt');
+  promptEl.value = s.customSystemPrompt || DEFAULT_SYSTEM_PROMPT;
+  updatePromptCharCount();
+
+  // Data stats
+  const chats = JSON.parse(localStorage.getItem('chat_history') || '[]');
+  document.getElementById('chat-count').textContent = chats.length;
+  const storageBytes = new Blob([JSON.stringify(localStorage)]).size;
+  document.getElementById('storage-used').textContent = storageBytes > 1024
+    ? (storageBytes / 1024).toFixed(1) + ' KB'
+    : storageBytes + ' B';
+
+  renderMemoryList('all');
+  const countBadge = document.getElementById('memory-count-badge');
+  if (countBadge) countBadge.textContent = getMemories().length;
+
+  document.getElementById('settings-modal').style.display = 'flex';
+  // Activate first tab
+  activateSettingsTab('api');
+};
+
+window.closeSettings = function() {
+  document.getElementById('settings-modal').style.display = 'none';
+};
+
+window.saveSettings = function() {
+  // API keys
+  const groqKey = document.getElementById('api-key-input').value.trim();
+  if (groqKey && !groqKey.startsWith('gsk_')) {
+    document.getElementById('api-key-error').style.display = 'block';
+    activateSettingsTab('api');
+    return;
+  }
+  document.getElementById('api-key-error').style.display = 'none';
+  if (groqKey) localStorage.setItem('groq_api_key', groqKey);
+  const tavilyKey = document.getElementById('tavily-key-input').value.trim();
+  if (tavilyKey) localStorage.setItem('tavily_api_key', tavilyKey);
+
+  // Model
+  const selectedModel = document.querySelector('.model-card.active')?.dataset.model;
+  if (selectedModel) {
+    modelSelect.value = selectedModel;
+    localStorage.setItem('selected_model', selectedModel);
+  }
+
+  // Sliders
+  const maxTokens = parseInt(document.getElementById('max-tokens-slider').value);
+  const agentLoopLimit = parseInt(document.getElementById('agent-loop-slider').value);
+  const fontSize = parseInt(document.getElementById('font-size-slider').value);
+
+  // Theme
+  const selectedTheme = document.querySelector('.theme-card.active')?.dataset.theme || 'dark';
+  localStorage.setItem('theme', selectedTheme);
+  if (selectedTheme === 'light') {
     document.body.classList.add('light');
     themeToggle.innerHTML = '<i class="ti ti-moon"></i>';
   } else {
     document.body.classList.remove('light');
     themeToggle.innerHTML = '<i class="ti ti-sun"></i>';
   }
+
+  // Density
+  const density = document.querySelector('.density-card.active')?.dataset.density || 'comfortable';
+
+  // Agent tools
+  ['web_search','read_file','write_file','run_code','open_url'].forEach(t => {
+    const el = document.getElementById('tool-' + t);
+    if (!el) return;
+    if (el.checked) enabledTools.add(t);
+    else enabledTools.delete(t);
+    // Sync sidebar chip
+    const chip = document.querySelector('.tool-chip[data-tool="' + t + '"]');
+    if (chip) chip.classList.toggle('active', el.checked);
+  });
+  updateAgentBadges();
+
+  // System prompt
+  const customPrompt = document.getElementById('custom-system-prompt').value.trim();
+
+  const newSettings = { maxTokens, agentLoopLimit, fontSize, density, customSystemPrompt: customPrompt };
+  saveSettingsToStorage(newSettings);
+  applySettings(newSettings);
+
+  closeSettings();
+  addMessage('bot', '<span style="color:#86efac;">✓ Settings saved.</span>');
+};
+
+function applySettings(s) {
+  const el = document.getElementById('messages');
+  if (!el) return;
+  el.style.fontSize = s.fontSize + 'px';
+  el.dataset.density = s.density;
+}
+
+/* ─── Settings tabs ─── */
+function activateSettingsTab(tabId) {
+  document.querySelectorAll('.settings-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tabId));
+  document.querySelectorAll('.settings-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + tabId));
+}
+
+function updatePromptCharCount() {
+  const el = document.getElementById('custom-system-prompt');
+  const count = document.getElementById('prompt-char-count');
+  if (el && count) count.textContent = el.value.length + ' chars';
+}
+
+window.resetSystemPrompt = function() {
+  document.getElementById('custom-system-prompt').value = DEFAULT_SYSTEM_PROMPT;
+  updatePromptCharCount();
+};
+
+window.toggleReveal = function(inputId, btn) {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  const isPassword = input.type === 'password';
+  input.type = isPassword ? 'text' : 'password';
+  btn.innerHTML = isPassword ? '<i class="ti ti-eye-off"></i>' : '<i class="ti ti-eye"></i>';
+};
+
+/* ─── Data actions ─── */
+window.exportAllChats = function() {
+  const chats = JSON.parse(localStorage.getItem('chat_history') || '[]');
+  if (!chats.length) { alert('No chats to export.'); return; }
+  let md = '# AvinashGPT — All Chats Export\n\n';
+  chats.forEach((chat, i) => {
+    md += '## Chat ' + (i + 1) + ': ' + chat.title + '\n\n';
+    (chat.history || []).forEach(msg => {
+      const role = msg.role === 'user' ? '**You**' : '**AvinashGPT**';
+      const content = typeof msg.content === 'string' ? msg.content :
+        (Array.isArray(msg.content) ? msg.content.map(b => b.text || '[image]').join('\n') : '');
+      md += role + ': ' + content + '\n\n';
+    });
+    md += '---\n\n';
+  });
+  md += '*Exported on ' + new Date().toLocaleString() + '*';
+  const blob = new Blob([md], { type: 'text/markdown' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = 'AvinashGPT-all-chats.md'; a.click();
+  URL.revokeObjectURL(url);
+};
+
+window.confirmClearChats = function() {
+  const box = document.getElementById('data-confirm-box');
+  document.getElementById('data-confirm-msg').textContent = 'This will permanently delete all saved chat history. Are you sure?';
+  document.getElementById('data-confirm-yes').onclick = () => {
+    localStorage.removeItem('chat_history');
+    loadChatHistory();
+    box.style.display = 'none';
+    document.getElementById('chat-count').textContent = '0';
+    document.getElementById('storage-used').textContent = '0 B';
+    addMessage('bot', '<span style="color:#86efac;">✓ Chat history cleared.</span>');
+  };
+  box.style.display = 'block';
+};
+
+window.confirmFactoryReset = function() {
+  const box = document.getElementById('data-confirm-box');
+  document.getElementById('data-confirm-msg').textContent = 'This will delete ALL data including API keys, settings, and chat history. Cannot be undone.';
+  document.getElementById('data-confirm-yes').onclick = () => {
+    localStorage.clear();
+    location.reload();
+  };
+  box.style.display = 'block';
+};
+
+/* ─── Theme toggle (IMPROVED) ─── */
+function loadTheme() {
+  const theme = localStorage.getItem('theme') || 'dark';
+  if (theme === 'light') {
+    document.body.classList.add('light');
+    if (themeToggle) themeToggle.innerHTML = '<i class="ti ti-moon"></i>';
+  } else {
+    document.body.classList.remove('light');
+    if (themeToggle) themeToggle.innerHTML = '<i class="ti ti-sun"></i>';
+  }
 }
 loadTheme();
 
-themeToggle.addEventListener('click', () => {
+themeToggle?.addEventListener('click', () => {
   const isLight = document.body.classList.toggle('light');
   localStorage.setItem('theme', isLight ? 'light' : 'dark');
   themeToggle.innerHTML = isLight ? '<i class="ti ti-moon"></i>' : '<i class="ti ti-sun"></i>';
@@ -137,26 +588,26 @@ themeToggle.addEventListener('click', () => {
 /* ─── Model selector (IMPROVED) ─── */
 function loadModel() {
   const saved = localStorage.getItem('selected_model');
-  if (saved) modelSelect.value = saved;
+  if (saved && modelSelect) modelSelect.value = saved;
 }
 loadModel();
-modelSelect.addEventListener('change', () => {
+modelSelect?.addEventListener('change', () => {
   localStorage.setItem('selected_model', modelSelect.value);
 });
 
 /* ─── Sidebar toggle (IMPROVED: localStorage) ─── */
 function loadSidebarState() {
   const collapsed = localStorage.getItem('sidebar_collapsed');
-  if (collapsed === 'true') sidebarEl.classList.add('collapsed');
+  if (collapsed === 'true' && sidebarEl) sidebarEl.classList.add('collapsed');
 }
 loadSidebarState();
 
-toggleBtn.addEventListener('click', () => {
+toggleBtn?.addEventListener('click', () => {
   sidebarEl.classList.toggle('collapsed');
   localStorage.setItem('sidebar_collapsed', sidebarEl.classList.contains('collapsed'));
 });
 
-/* ─── Quick prompts (IMPROVED: breakpoint check) ─── */
+/* ─── Quick prompts ─── */
 document.querySelectorAll('.quick-item').forEach(btn => {
   btn.addEventListener('click', () => {
     inputEl.value = btn.dataset.prompt;
@@ -254,20 +705,21 @@ function renderBubbleContent(content) {
 }
 
 /* ─── File upload handlers ─── */
-uploadBtn.addEventListener('click', () => fileInput.click());
+uploadBtn?.addEventListener('click', () => fileInput?.click());
 
-fileInput.addEventListener('change', () => {
+fileInput?.addEventListener('change', () => {
   if (fileInput.files.length > 0) {
-    handleFile(fileInput.files[0]);
+    for (const f of fileInput.files) handleFile(f);
     fileInput.value = '';
   }
 });
 
 document.addEventListener('paste', (e) => {
-  const item = [...e.clipboardData.items].find(i => i.type.startsWith('image/'));
-  if (item) {
-    const file = item.getAsFile();
-    if (file) handleFile(file);
+  for (const item of e.clipboardData.items) {
+    if (item.type.startsWith('image/')) {
+      const file = item.getAsFile();
+      if (file) handleFile(file);
+    }
   }
 });
 
@@ -279,7 +731,7 @@ document.addEventListener('drop', (e) => {
   e.preventDefault();
   dropOverlay.style.display = 'none';
   const files = e.dataTransfer.files;
-  if (files.length > 0) handleFile(files[0]);
+  for (const f of files) handleFile(f);
 });
 
 function handleFile(file) {
@@ -288,13 +740,13 @@ function handleFile(file) {
 
   const reader = new FileReader();
   reader.onload = (e) => {
-    currentAttachment = {
+    currentAttachments.push({
       name: file.name,
       size: file.size,
       type: isImage ? 'image' : (isPdf ? 'pdf' : 'file'),
       mime: file.type,
       data: e.target.result
-    };
+    });
     showPreview();
     inputEl.focus();
   };
@@ -307,36 +759,48 @@ function handleFile(file) {
 }
 
 function showPreview() {
-  if (!currentAttachment) return;
+  if (!currentAttachments.length) { previewArea.style.display = 'none'; return; }
   previewArea.style.display = 'block';
-
-  const size = formatSize(currentAttachment.size);
-  const safeName = escapeHtml(currentAttachment.name);
-
-  if (currentAttachment.type === 'image') {
-    previewArea.innerHTML =
-      '<div class="preview-item">' +
-        '<img class="preview-thumb" src="' + currentAttachment.data + '" alt="' + safeName + '" onclick="openLightbox(\'' + currentAttachment.data.replace(/'/g, "\\'") + '\')" />' +
+  previewArea.innerHTML = '';
+  currentAttachments.forEach(function(att, i) {
+    const size = formatSize(att.size);
+    const safeName = escapeHtml(att.name);
+    let item;
+    if (att.type === 'image') {
+      item = document.createElement('div');
+      item.className = 'preview-item';
+      item.innerHTML =
+        '<img class="preview-thumb" src="' + att.data + '" alt="' + safeName + '" onclick="openLightbox(\'' + att.data.replace(/'/g, "\\'") + '\')" />' +
         '<span class="preview-name">' + safeName + '</span>' +
         '<span class="preview-size">' + size + '</span>' +
-        '<button class="preview-remove" onclick="removeAttachment()"><i class="ti ti-x"></i></button>' +
-      '</div>';
-  } else {
-    const icon = getFileIcon(currentAttachment.name);
-    previewArea.innerHTML =
-      '<div class="preview-item">' +
+        '<button class="preview-remove" data-idx="' + i + '"><i class="ti ti-x"></i></button>';
+    } else {
+      const icon = getFileIcon(att.name);
+      item = document.createElement('div');
+      item.className = 'preview-item';
+      item.innerHTML =
         '<i class="ti ' + icon + ' preview-file-icon"></i>' +
         '<span class="preview-name">' + safeName + '</span>' +
         '<span class="preview-size">' + size + '</span>' +
-        '<button class="preview-remove" onclick="removeAttachment()"><i class="ti ti-x"></i></button>' +
-      '</div>';
-  }
+        '<button class="preview-remove" data-idx="' + i + '"><i class="ti ti-x"></i></button>';
+    }
+    item.querySelector('.preview-remove').addEventListener('click', function() { removeAttachment(i); });
+    previewArea.appendChild(item);
+  });
 }
 
-window.removeAttachment = function() {
-  currentAttachment = null;
-  previewArea.style.display = 'none';
-  previewArea.innerHTML = '';
+window.removeAttachment = function(idx) {
+  if (idx !== undefined && idx >= 0 && idx < currentAttachments.length) {
+    currentAttachments.splice(idx, 1);
+  } else {
+    currentAttachments = [];
+  }
+  if (currentAttachments.length) {
+    showPreview();
+  } else {
+    previewArea.style.display = 'none';
+    previewArea.innerHTML = '';
+  }
 };
 
 function escapeHtml(str) {
@@ -369,19 +833,20 @@ function getFileIcon(filename) {
 /* ─── New chat / Clear ─── */
 function resetChat() {
   conversationHistory = [];
-  messagesEl.innerHTML = '';
+  if (messagesEl) messagesEl.innerHTML = '';
   currentChatId = null;
   lastUserMessage = '';
   lastUserBubbleHtml = '';
-  removeAttachment();
+  currentAttachments = [];
+  if (previewArea) { previewArea.style.display = 'none'; previewArea.innerHTML = ''; }
   appendWelcome();
-  messagesEl.scrollTop = 0;
+  if (messagesEl) messagesEl.scrollTop = 0;
 }
-newChatBtn.addEventListener('click', resetChat);
-clearBtn.addEventListener('click', resetChat);
+newChatBtn?.addEventListener('click', resetChat);
+clearBtn?.addEventListener('click', resetChat);
 
 /* ─── Character counter (IMPROVED) ─── */
-inputEl.addEventListener('input', () => {
+inputEl?.addEventListener('input', () => {
   const len = inputEl.value.length;
   charCounter.textContent = len + ' / 4000';
   charCounter.className = '';
@@ -402,17 +867,17 @@ function debounceResize() {
 }
 
 /* ─── Send on Enter (Shift+Enter = newline) ─── */
-inputEl.addEventListener('keydown', e => {
+inputEl?.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
 });
-sendBtn.addEventListener('click', () => handleSend());
+sendBtn?.addEventListener('click', () => handleSend());
 
 /* ─── Scroll to bottom (IMPROVED) ─── */
-messagesEl.addEventListener('scroll', () => {
+messagesEl?.addEventListener('scroll', () => {
   const dist = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight;
   scrollBtn.classList.toggle('show', dist > 200);
 });
-scrollBtn.addEventListener('click', () => {
+scrollBtn?.addEventListener('click', () => {
   messagesEl.scrollTop = messagesEl.scrollHeight;
   scrollBtn.classList.remove('show');
 });
@@ -439,6 +904,7 @@ function appendWelcome() {
       <div class="welcome-icon">✦</div>
       <p>Hey! I'm <strong>AvinashGPT</strong> — your full-stack AI coding assistant.</p>
       <p class="welcome-sub">I write, debug, and explain code across <strong>all major languages & frameworks</strong>. Pick a quick prompt or type your own below.</p>
+      <p class="welcome-sub" style="margin-top:8px;"> New: Attach <strong>multiple files</strong> at once. Enable <strong>Agent Mode</strong> in the sidebar for web search & file tools.</p>
     </div>`;
   messagesEl.appendChild(div);
 }
@@ -470,13 +936,14 @@ function showTyping() {
     '</div></div>';
   messagesEl.appendChild(div);
   messagesEl.scrollTop = messagesEl.scrollHeight;
-  statusDot.classList.add('loading'); // IMPROVED
-  statusText.textContent = 'AvinashGPT is thinking...'; // IMPROVED
+  statusDot.classList.add('loading');
+  statusText.textContent = agentMode ? 'Agent is working...' : 'AvinashGPT is thinking...';
 }
 function removeTyping() {
   document.getElementById('typing-indicator')?.remove();
-  statusDot.classList.remove('loading'); // IMPROVED
-  statusText.textContent = 'AvinashGPT is online'; // IMPROVED
+  statusDot.classList.remove('loading');
+  statusText.textContent = 'AvinashGPT is online';
+  if (agentMode) agentStatusText.textContent = 'Agent ready';
 }
 
 /* ─── Streaming effect (IMPROVED: word-by-word reveal) ─── */
@@ -582,7 +1049,7 @@ window.copyCode = function(id) {
 };
 
 /* ─── Export chat (IMPROVED) ─── */
-exportBtn.addEventListener('click', () => {
+exportBtn?.addEventListener('click', () => {
   if (!conversationHistory.length) return;
   let md = '# AvinashGPT Chat Export\n\n';
   conversationHistory.forEach(msg => {
@@ -705,7 +1172,7 @@ function highlightRust(code) {
 /* ─── Main send handler (IMPROVED: regenerate, content blocks, rate limit) ─── */
 async function handleSend(isRegenerate) {
   const text = inputEl.value.trim();
-  if ((!text && !currentAttachment && !isRegenerate) || isLoading) return;
+  if ((!text && !currentAttachments.length && !isRegenerate) || isLoading) return;
 
   let messageContent;
   let bubbleHtml = '';
@@ -721,29 +1188,26 @@ async function handleSend(isRegenerate) {
       messagesEl.removeChild(messagesEl.lastChild);
     }
   } else {
-    console.log('🔍 currentAttachment:', currentAttachment ? 'SET (' + currentAttachment.type + ', ' + currentAttachment.name + ')' : 'NULL');
-    const hasAttachment = !!currentAttachment;
-    console.log('🔍 hasAttachment:', hasAttachment, '| text length:', text.length);
-    if (hasAttachment) {
-      console.log('✅ ENTERED attachment branch, type:', currentAttachment.type);
+    if (currentAttachments.length) {
       const blocks = [];
-      if (currentAttachment.type === 'image') {
-        bubbleHtml += '<img class="attached-image" src="' + currentAttachment.data + '" alt="' + escapeHtml(currentAttachment.name) + '" onclick="openLightbox(\'' + currentAttachment.data.replace(/'/g, "\\'") + '\')" />';
-        blocks.push({ type: 'text', text: text || 'Analyze this image.' });
-        blocks.push({ type: 'image_url', image_url: { url: currentAttachment.data } });
-      } else if (currentAttachment.type === 'pdf') {
-        bubbleHtml += '<div class="attached-file"><i class="ti ' + getFileIcon(currentAttachment.name) + '"></i><span class="attached-file-name">' + escapeHtml(currentAttachment.name) + '</span><span class="attached-file-size">' + formatSize(currentAttachment.size) + '</span></div>';
-        blocks.push({ type: 'text', text: '--- Attached file: ' + currentAttachment.name + ' (base64) ---\n' + currentAttachment.data + '\n---' });
-        if (text) blocks.push({ type: 'text', text: text });
-      } else {
-        bubbleHtml += '<div class="attached-file"><i class="ti ' + getFileIcon(currentAttachment.name) + '"></i><span class="attached-file-name">' + escapeHtml(currentAttachment.name) + '</span><span class="attached-file-size">' + formatSize(currentAttachment.size) + '</span></div>';
-        blocks.push({ type: 'text', text: '--- File: ' + currentAttachment.name + ' ---\n' + currentAttachment.data });
-        if (text) blocks.push({ type: 'text', text: text });
-      }
+      var firstImage = true;
+      currentAttachments.forEach(function(att) {
+        if (att.type === 'image') {
+          bubbleHtml += '<img class="attached-image" src="' + att.data + '" alt="' + escapeHtml(att.name) + '" onclick="openLightbox(\'' + att.data.replace(/'/g, "\\'") + '\')" />';
+          if (firstImage) { blocks.push({ type: 'text', text: text || 'Analyze this image.' }); firstImage = false; }
+          blocks.push({ type: 'image_url', image_url: { url: att.data } });
+        } else if (att.type === 'pdf') {
+          bubbleHtml += '<div class="attached-file"><i class="ti ' + getFileIcon(att.name) + '"></i><span class="attached-file-name">' + escapeHtml(att.name) + '</span><span class="attached-file-size">' + formatSize(att.size) + '</span></div>';
+          blocks.push({ type: 'text', text: '--- Attached file: ' + att.name + ' (base64) ---\n' + att.data + '\n---' });
+        } else {
+          bubbleHtml += '<div class="attached-file"><i class="ti ' + getFileIcon(att.name) + '"></i><span class="attached-file-name">' + escapeHtml(att.name) + '</span><span class="attached-file-size">' + formatSize(att.size) + '</span></div>';
+          blocks.push({ type: 'text', text: '--- File: ' + att.name + ' ---\n' + att.data });
+        }
+      });
+      if (text) blocks.push({ type: 'text', text: text });
       messageContent = blocks;
       bubbleHtml += (text ? '<br><br>' + escapeHtml(text) : '');
     } else {
-      console.log('❌ ELSE branch (no attachment), text:', JSON.stringify(text));
       messageContent = text;
       bubbleHtml = escapeHtml(text);
     }
@@ -751,7 +1215,9 @@ async function handleSend(isRegenerate) {
     lastUserBubbleHtml = bubbleHtml;
     inputEl.value = '';
     inputEl.style.height = 'auto';
-    removeAttachment();
+    currentAttachments = [];
+    previewArea.style.display = 'none';
+    previewArea.innerHTML = '';
   }
 
   isLoading = true;
@@ -767,39 +1233,41 @@ async function handleSend(isRegenerate) {
       throw new Error('No API key set. Click the key icon to add one.');
     }
 
+    const s = getSettings();
+    const customPrompt = s.customSystemPrompt && s.customSystemPrompt.trim();
+    const systemPrompt = agentMode ? AGENT_SYSTEM_PROMPT : (customPrompt || SYSTEM_PROMPT);
+    const systemPromptWithMemory = buildSystemPromptWithMemory(systemPrompt);
     const requestMessages = [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: systemPromptWithMemory },
       ...conversationHistory
     ];
-    console.log('📤 Messages structure:', JSON.stringify(requestMessages.map(m => ({
-      role: m.role,
-      content_type: Array.isArray(m.content) ? 'array[' + m.content.map(c => c.type).join(',') + ']' : typeof m.content,
-      content_len: typeof m.content === 'string' ? m.content.length : (Array.isArray(m.content) ? m.content.length + ' blocks' : '?')
-    })), null, 2));
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + apiKey
-      },
-      body: JSON.stringify({
-        model: modelSelect.value,
-        max_tokens: 1500,
-        messages: requestMessages
-      })
-    });
+    let reply = await callGroq(apiKey, requestMessages);
 
-    if (response.status === 429) {
-      throw new Error('rate_limit');
+    // ─── Agent loop: handle tool calls ───
+    if (agentMode) {
+      let iterations = 0;
+      const loopLimit = getSettings().agentLoopLimit || 5;
+      while (iterations < loopLimit) {
+        const toolCall = parseToolCall(reply);
+        if (!toolCall) break;
+        iterations++;
+
+        removeTyping();
+        const toolResult = await executeTool(toolCall);
+
+        const toolResultMsg = '[Tool: ' + toolResult.tool + ']\nResult: ' + toolResult.result;
+        conversationHistory.push({ role: 'assistant', content: reply });
+        conversationHistory.push({ role: 'user', content: toolResultMsg });
+
+        showTyping();
+        const nextMessages = [
+          { role: 'system', content: systemPromptWithMemory },
+          ...conversationHistory
+        ];
+        reply = await callGroq(apiKey, nextMessages);
+      }
     }
 
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(err.error?.message || 'HTTP ' + response.status);
-    }
-
-    const data = await response.json();
-    const reply = data.choices?.[0]?.message?.content || 'No response received.';
     conversationHistory.push({ role: 'assistant', content: reply });
 
     removeTyping();
@@ -811,8 +1279,8 @@ async function handleSend(isRegenerate) {
     actions.innerHTML = '<button class="regenerate-btn" onclick="handleSend(true)"><i class="ti ti-refresh"></i> Regenerate</button>';
     const bubbleEl = msgDiv?.querySelector('.message-bubble');
     if (bubbleEl) bubbleEl.appendChild(actions);
-    // IMPROVED: Save chat history after each exchange
     saveChatHistory();
+    extractMemories();
 
   } catch (err) {
     removeTyping();
@@ -832,6 +1300,167 @@ async function handleSend(isRegenerate) {
   }
 }
 
+/* ─── Groq API helper ─── */
+async function callGroq(apiKey, messages) {
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
+    body: JSON.stringify({ model: modelSelect.value, max_tokens: getSettings().maxTokens || 1500, messages })
+  });
+  if (response.status === 429) throw new Error('rate_limit');
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error?.message || 'HTTP ' + response.status);
+  }
+  const data = await response.json();
+  return data.choices?.[0]?.message?.content || 'No response received.';
+}
+
+/* ─── Memory: Prompt injection ─── */
+function buildSystemPromptWithMemory(basePrompt) {
+  const memories = getMemories();
+  if (!memories.length) return basePrompt;
+  const memBlock = memories.slice(-30).map(m => '- [' + m.category + '] ' + m.content).join('\n');
+  return basePrompt + '\n\nWHAT YOU REMEMBER ABOUT THIS USER:\n' + memBlock + '\n\nUse this context naturally. Don\'t repeat it back unless asked.';
+}
+
+/* ─── Memory: Auto-extraction ─── */
+async function extractMemories() {
+  if (conversationHistory.length % 3 !== 0 || !conversationHistory.length) return;
+  const apiKey = localStorage.getItem('groq_api_key');
+  if (!apiKey) return;
+  const chatTitle = (() => {
+    const firstMsg = conversationHistory.find(m => m.role === 'user');
+    if (!firstMsg) return 'Chat';
+    const t = typeof firstMsg.content === 'string' ? firstMsg.content :
+      (Array.isArray(firstMsg.content) ? firstMsg.content.find(b => b.type === 'text')?.text || '' : '');
+    return t.substring(0, 30) + (t.length > 30 ? '...' : '');
+  })();
+  const recent = conversationHistory.slice(-6).map(m => m.role + ': ' + (typeof m.content === 'string' ? m.content : '[file/image]')).join('\n');
+  const extractPrompt = 'You are a memory extractor. Review this conversation and extract any NEW facts about the user worth remembering long-term.\n\nFocus on:\n- Skills & technologies they use (languages, frameworks, tools, cloud platforms)\n- Preferences (coding style, preferred language, tone they like)\n- Projects they are building\n- Personal info (name, job title, company)\n\nConversation:\n' + recent + '\n\nRespond ONLY with a JSON array. Each item: {"content": "fact here", "category": "skill|preference|project|personal"}\nIf nothing new to remember, respond with exactly: []\nDo not include markdown, no backticks, raw JSON only.';
+  try {
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
+      body: JSON.stringify({ model: 'llama-3.1-8b-instant', max_tokens: 500, messages: [{ role: 'user', content: extractPrompt }] })
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    const text = data.choices?.[0]?.message?.content || '[]';
+    const extracted = JSON.parse(text);
+    if (Array.isArray(extracted)) extracted.forEach(item => { if (item.content && item.category) addMemory(item.content, item.category, chatTitle); });
+  } catch (e) { /* silent */ }
+}
+
+/* ─── Memory: UI ─── */
+function updateMemoryBadge() {
+  const memories = getMemories();
+  const badge = document.getElementById('memory-badge');
+  const list = document.getElementById('memory-preview-list');
+  if (badge) badge.textContent = memories.length;
+  if (list) {
+    list.innerHTML = memories.slice(-3).reverse().map(m => {
+      const icons = { skill: '🛠️', preference: '❤️', project: '📁', personal: '👤' };
+      return '<div class="memory-chip">' + (icons[m.category] || '💡') + ' ' + escapeHtml(m.content.substring(0, 40)) + (m.content.length > 40 ? '...' : '') + '</div>';
+    }).join('');
+  }
+}
+
+function renderMemoryList(filter) {
+  const container = document.getElementById('memory-list');
+  if (!container) return;
+  const memories = filter === 'all' ? getMemories() : getMemories().filter(m => m.category === filter);
+  if (!memories.length) { container.innerHTML = '<div class="memory-empty">No memories yet. Chat with AvinashGPT to build your memory.</div>'; return; }
+  const icons = { skill: '🛠️', preference: '❤️', project: '📁', personal: '👤' };
+  const now = Date.now();
+  container.innerHTML = memories.slice().reverse().map(m => {
+    const days = Math.floor((now - m.timestamp) / 86400000);
+    const time = days === 0 ? 'today' : days === 1 ? 'yesterday' : days + ' days ago';
+    return '<div class="memory-item" data-category="' + m.category + '">' +
+      '<div class="memory-item-icon">' + (icons[m.category] || '💡') + '</div>' +
+      '<div class="memory-item-body">' +
+        '<div class="memory-item-content">' + escapeHtml(m.content) + '</div>' +
+        '<div class="memory-item-meta">' + m.category + ' · from "' + escapeHtml(m.source) + '" · ' + time + '</div>' +
+      '</div>' +
+      '<button class="memory-item-delete" onclick="deleteMemoryAndRefresh(\'' + m.id + '\')"><i class="ti ti-x"></i></button>' +
+    '</div>';
+  }).join('');
+}
+
+window.deleteMemoryAndRefresh = function(id) { deleteMemory(id); renderMemoryList(document.querySelector('.memory-filter.active')?.dataset?.filter || 'all'); };
+
+window.confirmClearMemories = function() {
+  const box = document.getElementById('data-confirm-box');
+  document.getElementById('data-confirm-msg').textContent = 'This will permanently delete all saved memories. Are you sure?';
+  document.getElementById('data-confirm-yes').onclick = () => {
+    clearAllMemories();
+    renderMemoryList('all');
+    updateMemoryBadge();
+    const badge = document.getElementById('memory-count-badge');
+    if (badge) badge.textContent = '0';
+    box.style.display = 'none';
+  };
+  box.style.display = 'block';
+};
+
+window.activateSettingsTab = function(tabId) {
+  document.querySelectorAll('.settings-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tabId));
+  document.querySelectorAll('.settings-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + tabId));
+};
+
 /* ─── Init ─── */
-appendWelcome();
-loadChatHistory();
+document.addEventListener('DOMContentLoaded', () => {
+  try {
+    // Settings modal — setup event listeners
+    document.getElementById('settings-btn')?.addEventListener('click', openSettings);
+    document.querySelectorAll('.settings-tab').forEach(tab => {
+      tab.addEventListener('click', () => activateSettingsTab(tab.dataset.tab));
+    });
+    document.getElementById('max-tokens-slider')?.addEventListener('input', function() {
+      document.getElementById('max-tokens-val').textContent = this.value;
+    });
+    document.getElementById('agent-loop-slider')?.addEventListener('input', function() {
+      document.getElementById('agent-loop-val').textContent = this.value;
+    });
+    document.getElementById('font-size-slider')?.addEventListener('input', function() {
+      document.getElementById('font-size-val').textContent = this.value + 'px';
+      const m = document.getElementById('messages');
+      if (m) m.style.fontSize = this.value + 'px';
+    });
+    document.querySelectorAll('.model-card').forEach(card => {
+      card.addEventListener('click', () => {
+        document.querySelectorAll('.model-card').forEach(c => c.classList.remove('active'));
+        card.classList.add('active');
+      });
+    });
+    document.querySelectorAll('.theme-card').forEach(card => {
+      card.addEventListener('click', () => {
+        document.querySelectorAll('.theme-card').forEach(c => c.classList.remove('active'));
+        card.classList.add('active');
+      });
+    });
+    document.querySelectorAll('.density-card').forEach(card => {
+      card.addEventListener('click', () => {
+        document.querySelectorAll('.density-card').forEach(c => c.classList.remove('active'));
+        card.classList.add('active');
+      });
+    });
+    document.getElementById('custom-system-prompt')?.addEventListener('input', updatePromptCharCount);
+
+    // Memory filter buttons
+    document.querySelectorAll('.memory-filter').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.memory-filter').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        renderMemoryList(btn.dataset.filter);
+      });
+    });
+
+    updateMemoryBadge();
+    appendWelcome();
+    loadChatHistory();
+    applySettings(getSettings());
+  } catch (e) {
+    console.error('AvinashGPT init error:', e);
+  }
+});

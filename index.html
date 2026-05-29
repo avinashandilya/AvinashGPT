@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="public/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.8.0/dist/tabler-icons.min.css" />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
 </head>
 <body>
   <div id="app">
@@ -26,7 +27,40 @@
         </button>
       </div>
 
-      <!-- IMPROVED: Chat history list -->
+      <!-- Agent Mode Toggle -->
+      <div class="sidebar-section-label" style="margin-top:4px;">Mode</div>
+      <div id="agent-mode-panel" style="padding:0 12px 4px;">
+        <label class="agent-toggle-row">
+          <span class="agent-toggle-label">
+            <i class="ti ti-robot"></i> Agent Mode
+          </span>
+          <label class="toggle-switch">
+            <input type="checkbox" id="agent-mode-toggle" />
+            <span class="toggle-slider"></span>
+          </label>
+        </label>
+        <div id="agent-tools-list" style="display:none;">
+          <div class="tool-chip active" data-tool="web_search"><i class="ti ti-world-search"></i> Web Search</div>
+          <div class="tool-chip active" data-tool="read_file"><i class="ti ti-file-search"></i> Read File</div>
+          <div class="tool-chip active" data-tool="write_file"><i class="ti ti-file-pencil"></i> Write File</div>
+          <div class="tool-chip active" data-tool="run_code"><i class="ti ti-terminal-2"></i> Run Code</div>
+          <div class="tool-chip active" data-tool="open_url"><i class="ti ti-world-www"></i> Open URL</div>
+        </div>
+      </div>
+
+      <!-- Memory -->
+      <div class="sidebar-section-label" style="margin-top:4px;">
+        Memory
+        <span id="memory-badge" class="memory-badge">0</span>
+      </div>
+      <div id="memory-preview" style="padding:0 12px 8px;">
+        <div id="memory-preview-list"></div>
+        <button class="memory-view-all-btn" onclick="openSettings(); activateSettingsTab('memory')">
+          <i class="ti ti-brain"></i> View all memories
+        </button>
+      </div>
+
+      <!-- Recent Chats -->
       <div id="recent-chats-section" style="display:none">
         <div class="sidebar-section-label">Recent Chats</div>
         <div id="recent-chats-list"></div>
@@ -58,6 +92,13 @@
         <button class="quick-item" data-prompt="Write a Bash script to monitor disk usage and send an alert if over 80%">
           <i class="ti ti-terminal"></i> Bash script
         </button>
+        <!-- Agent quick prompts -->
+        <button class="quick-item agent-only" style="display:none" data-prompt="Search the web for the latest version of React and show me what changed">
+          <i class="ti ti-world-search"></i> Web search
+        </button>
+        <button class="quick-item agent-only" style="display:none" data-prompt="Search for the best free LLM APIs available in 2025 and compare them">
+          <i class="ti ti-robot"></i> Compare LLMs
+        </button>
       </div>
 
       <div class="sidebar-footer">
@@ -87,7 +128,7 @@
         </select>
         <!-- IMPROVED: Theme toggle -->
         <button id="theme-toggle" title="Toggle theme"><i class="ti ti-sun"></i></button>
-        <button id="api-key-btn" title="Set API key"><i class="ti ti-key"></i></button>
+        <button id="settings-btn" title="Settings"><i class="ti ti-settings"></i></button>
         <button id="export-btn" title="Export chat"><i class="ti ti-download"></i></button>
         <button id="clear-btn" title="Clear chat"><i class="ti ti-trash"></i></button>
       </header>
@@ -104,12 +145,18 @@
       <button id="scroll-bottom-btn" aria-label="Scroll to bottom"><i class="ti ti-arrow-down"></i></button>
 
       <div id="input-area">
+        <!-- Agent status bar -->
+        <div id="agent-status-bar" style="display:none">
+          <i class="ti ti-robot"></i>
+          <span id="agent-status-text">Agent ready</span>
+          <div id="agent-tool-badges"></div>
+        </div>
         <div id="preview-area" style="display:none"></div>
         <div id="input-box">
           <button id="upload-btn" title="Attach file" aria-label="Attach file">
             <i class="ti ti-paperclip"></i>
           </button>
-          <input type="file" id="file-input" style="display:none" accept="image/*,.pdf,.txt,.py,.js,.ts,.java,.sql,.csv,.json,.xml,.yaml,.md,.html,.css,.cpp,.go,.rs,.sh" />
+          <input type="file" id="file-input" style="display:none" accept="image/*,.pdf,.txt,.py,.js,.ts,.java,.sql,.csv,.json,.xml,.yaml,.md,.html,.css,.cpp,.go,.rs,.sh" multiple />
           <textarea
             id="user-input"
             placeholder="Ask me to write, debug, or explain any code..."
@@ -130,22 +177,289 @@
 
   </div>
 
-  <!-- IMPROVED: API key modal -->
+  <!-- Settings Modal -->
+  <div id="settings-modal" class="modal-overlay" style="display:none">
+    <div class="modal settings-modal">
+      <div class="modal-header">
+        <div class="modal-title"><i class="ti ti-settings"></i> Settings</div>
+        <button class="modal-close" onclick="closeSettings()"><i class="ti ti-x"></i></button>
+      </div>
+      <div class="settings-layout">
+        <!-- Sidebar tabs -->
+        <nav class="settings-tabs">
+          <button class="settings-tab active" data-tab="api"><i class="ti ti-key"></i> API Keys</button>
+          <button class="settings-tab" data-tab="model"><i class="ti ti-cpu"></i> Model</button>
+          <button class="settings-tab" data-tab="appearance"><i class="ti ti-palette"></i> Appearance</button>
+          <button class="settings-tab" data-tab="agent"><i class="ti ti-robot"></i> Agent</button>
+          <button class="settings-tab" data-tab="prompt"><i class="ti ti-prompt"></i> System Prompt</button>
+          <button class="settings-tab" data-tab="data"><i class="ti ti-database"></i> Data</button>
+          <button class="settings-tab" data-tab="memory"><i class="ti ti-brain"></i> Memory</button>
+          <button class="settings-tab" data-tab="about"><i class="ti ti-info-circle"></i> About</button>
+        </nav>
+
+        <!-- Tab panels -->
+        <div class="settings-panels">
+
+          <!-- API Keys -->
+          <div class="settings-panel active" id="tab-api">
+            <div class="settings-section-title">Groq API Key <span class="required">*</span></div>
+            <p class="settings-desc">Required to use AvinashGPT. Get one free at <a href="https://console.groq.com/keys" target="_blank">console.groq.com/keys</a></p>
+            <div class="settings-input-row">
+              <input type="password" id="api-key-input" placeholder="gsk_..." class="settings-input" />
+              <button class="settings-reveal-btn" onclick="toggleReveal('api-key-input', this)"><i class="ti ti-eye"></i></button>
+            </div>
+            <div id="api-key-error" class="settings-error" style="display:none">Please enter a valid Groq key (starts with gsk_)</div>
+
+            <div class="settings-divider"></div>
+
+            <div class="settings-section-title">Tavily API Key <span class="optional">optional</span></div>
+            <p class="settings-desc">Enables real web search results. Without it, DuckDuckGo fallback is used. Get free key at <a href="https://tavily.com" target="_blank">tavily.com</a></p>
+            <div class="settings-input-row">
+              <input type="password" id="tavily-key-input" placeholder="tvly-..." class="settings-input" />
+              <button class="settings-reveal-btn" onclick="toggleReveal('tavily-key-input', this)"><i class="ti ti-eye"></i></button>
+            </div>
+            <p class="settings-hint"><i class="ti ti-shield-lock"></i> Keys are stored locally in your browser only. Never sent to any server except the respective APIs.</p>
+          </div>
+
+          <!-- Model -->
+          <div class="settings-panel" id="tab-model">
+            <div class="settings-section-title">Default Model</div>
+            <p class="settings-desc">Choose which model to use for all conversations.</p>
+            <div class="model-cards" id="settings-model-cards">
+              <div class="model-card" data-model="meta-llama/llama-4-scout-17b-16e-instruct">
+                <div class="model-card-name">Llama 4 Scout</div>
+                <div class="model-card-desc">Best for vision & images. Multimodal, fast.</div>
+                <div class="model-card-tags"><span>Vision</span><span>Fast</span><span>Free</span></div>
+              </div>
+              <div class="model-card" data-model="llama-3.3-70b-versatile">
+                <div class="model-card-name">Llama 3.3 70B</div>
+                <div class="model-card-desc">Best for complex reasoning and long code tasks.</div>
+                <div class="model-card-tags"><span>Powerful</span><span>Reasoning</span><span>Free</span></div>
+              </div>
+              <div class="model-card" data-model="llama-3.1-8b-instant">
+                <div class="model-card-name">Llama 3.1 8B</div>
+                <div class="model-card-desc">Fastest responses. Good for quick questions.</div>
+                <div class="model-card-tags"><span>Fast</span><span>Lightweight</span><span>Free</span></div>
+              </div>
+            </div>
+
+            <div class="settings-divider"></div>
+
+            <div class="settings-section-title">Max Tokens <span id="max-tokens-val">1500</span></div>
+            <p class="settings-desc">Maximum length of each response. Higher = longer answers but slower.</p>
+            <input type="range" id="max-tokens-slider" min="256" max="4096" step="256" value="1500" class="settings-slider" />
+            <div class="settings-slider-labels"><span>256 (Short)</span><span>4096 (Max)</span></div>
+
+            <div class="settings-divider"></div>
+
+            <div class="settings-section-title">Agent Loop Limit <span id="agent-loop-val">5</span></div>
+            <p class="settings-desc">Max number of tool calls the agent can make per message.</p>
+            <input type="range" id="agent-loop-slider" min="1" max="10" step="1" value="5" class="settings-slider" />
+            <div class="settings-slider-labels"><span>1</span><span>10</span></div>
+          </div>
+
+          <!-- Appearance -->
+          <div class="settings-panel" id="tab-appearance">
+            <div class="settings-section-title">Theme</div>
+            <div class="theme-cards">
+              <div class="theme-card" data-theme="dark" id="theme-card-dark">
+                <div class="theme-preview dark-preview"></div>
+                <span>Dark</span>
+              </div>
+              <div class="theme-card" data-theme="light" id="theme-card-light">
+                <div class="theme-preview light-preview"></div>
+                <span>Light</span>
+              </div>
+            </div>
+
+            <div class="settings-divider"></div>
+
+            <div class="settings-section-title">Font Size <span id="font-size-val">14px</span></div>
+            <p class="settings-desc">Controls the size of text in chat messages.</p>
+            <input type="range" id="font-size-slider" min="12" max="18" step="1" value="14" class="settings-slider" />
+            <div class="settings-slider-labels"><span>12px (Small)</span><span>18px (Large)</span></div>
+
+            <div class="settings-divider"></div>
+
+            <div class="settings-section-title">Message Density</div>
+            <div class="density-cards">
+              <div class="density-card active" data-density="comfortable" id="density-comfortable">
+                <i class="ti ti-layout-rows"></i> Comfortable
+              </div>
+              <div class="density-card" data-density="compact" id="density-compact">
+                <i class="ti ti-layout-list"></i> Compact
+              </div>
+            </div>
+          </div>
+
+          <!-- Agent -->
+          <div class="settings-panel" id="tab-agent">
+            <div class="settings-section-title">Available Tools</div>
+            <p class="settings-desc">Toggle which tools the agent can use when Agent Mode is enabled.</p>
+            <div class="agent-tool-toggles">
+              <div class="agent-tool-row">
+                <div class="agent-tool-info">
+                  <i class="ti ti-world-search"></i>
+                  <div>
+                    <div class="agent-tool-name">Web Search</div>
+                    <div class="agent-tool-desc">Search the internet via Tavily or DuckDuckGo</div>
+                  </div>
+                </div>
+                <label class="toggle-switch"><input type="checkbox" id="tool-web_search" checked /><span class="toggle-slider"></span></label>
+              </div>
+              <div class="agent-tool-row">
+                <div class="agent-tool-info">
+                  <i class="ti ti-file-search"></i>
+                  <div>
+                    <div class="agent-tool-name">Read File</div>
+                    <div class="agent-tool-desc">Analyze files you attach to the conversation</div>
+                  </div>
+                </div>
+                <label class="toggle-switch"><input type="checkbox" id="tool-read_file" checked /><span class="toggle-slider"></span></label>
+              </div>
+              <div class="agent-tool-row">
+                <div class="agent-tool-info">
+                  <i class="ti ti-file-pencil"></i>
+                  <div>
+                    <div class="agent-tool-name">Write File</div>
+                    <div class="agent-tool-desc">Generate and auto-download files to your PC</div>
+                  </div>
+                </div>
+                <label class="toggle-switch"><input type="checkbox" id="tool-write_file" checked /><span class="toggle-slider"></span></label>
+              </div>
+              <div class="agent-tool-row">
+                <div class="agent-tool-info">
+                  <i class="ti ti-terminal-2"></i>
+                  <div>
+                    <div class="agent-tool-name">Run Code</div>
+                    <div class="agent-tool-desc">Execute Python (Pyodide) or JavaScript in browser</div>
+                  </div>
+                </div>
+                <label class="toggle-switch"><input type="checkbox" id="tool-run_code" checked /><span class="toggle-slider"></span></label>
+              </div>
+              <div class="agent-tool-row">
+                <div class="agent-tool-info">
+                  <i class="ti ti-world-www"></i>
+                  <div>
+                    <div class="agent-tool-name">Open URL</div>
+                    <div class="agent-tool-desc">Fetch and read any webpage via Jina AI reader</div>
+                  </div>
+                </div>
+                <label class="toggle-switch"><input type="checkbox" id="tool-open_url" checked /><span class="toggle-slider"></span></label>
+              </div>
+            </div>
+          </div>
+
+          <!-- System Prompt -->
+          <div class="settings-panel" id="tab-prompt">
+            <div class="settings-section-title">Custom System Prompt</div>
+            <p class="settings-desc">Customize AvinashGPT's personality, tone, and behaviour. Changes apply to all new messages.</p>
+            <textarea id="custom-system-prompt" class="settings-textarea" placeholder="You are AvinashGPT..."></textarea>
+            <div class="settings-prompt-actions">
+              <button class="settings-btn-ghost" onclick="resetSystemPrompt()"><i class="ti ti-refresh"></i> Reset to Default</button>
+              <span id="prompt-char-count" class="settings-hint">0 chars</span>
+            </div>
+          </div>
+
+          <!-- Data -->
+          <div class="settings-panel" id="tab-data">
+            <div class="settings-section-title">Chat History</div>
+            <p class="settings-desc">You have <strong id="chat-count">0</strong> saved chats taking up <strong id="storage-used">0 KB</strong> of storage.</p>
+            <div class="data-actions">
+              <button class="settings-btn-ghost" onclick="exportAllChats()"><i class="ti ti-download"></i> Export All Chats</button>
+              <button class="settings-btn-danger" onclick="confirmClearChats()"><i class="ti ti-trash"></i> Clear Chat History</button>
+            </div>
+
+            <div class="settings-divider"></div>
+
+            <div class="settings-section-title">Settings & Keys</div>
+            <p class="settings-desc">Remove all saved API keys and preferences.</p>
+            <div class="data-actions">
+              <button class="settings-btn-danger" onclick="confirmFactoryReset()"><i class="ti ti-restore"></i> Factory Reset</button>
+            </div>
+
+            <div id="data-confirm-box" class="data-confirm-box" style="display:none">
+              <p id="data-confirm-msg"></p>
+              <div style="display:flex;gap:8px;margin-top:10px;">
+                <button class="settings-btn-danger" id="data-confirm-yes">Yes, delete</button>
+                <button class="settings-btn-ghost" onclick="document.getElementById('data-confirm-box').style.display='none'">Cancel</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Memory -->
+          <div class="settings-panel" id="tab-memory">
+            <div class="settings-section-title">
+              Memories
+              <span id="memory-count-badge" class="memory-badge">0</span>
+            </div>
+            <p class="settings-desc">AvinashGPT automatically learns facts about you from your conversations and uses them to give better answers.</p>
+
+            <div class="memory-filter-row">
+              <button class="memory-filter active" data-filter="all">All</button>
+              <button class="memory-filter" data-filter="skill">🛠️ Skills</button>
+              <button class="memory-filter" data-filter="preference">❤️ Preferences</button>
+              <button class="memory-filter" data-filter="project">📁 Projects</button>
+              <button class="memory-filter" data-filter="personal">👤 Personal</button>
+            </div>
+
+            <div id="memory-list"></div>
+
+            <div class="settings-divider"></div>
+            <div class="data-actions">
+              <button class="settings-btn-danger" onclick="confirmClearMemories()">
+                <i class="ti ti-brain-off"></i> Clear All Memories
+              </button>
+            </div>
+          </div>
+
+          <!-- About -->
+          <div class="settings-panel" id="tab-about">
+            <div class="about-logo">
+              <div class="logo-icon" style="width:48px;height:48px;font-size:22px;">A</div>
+              <div>
+                <div style="font-size:18px;font-weight:600;">AvinashGPT</div>
+                <div style="font-size:12px;color:var(--text-muted);">Version 3.0 · Agent Edition</div>
+              </div>
+            </div>
+            <div class="settings-divider"></div>
+            <div class="about-rows">
+              <div class="about-row"><span>Built by</span><span>Avinash Kumar</span></div>
+              <div class="about-row"><span>LLM Provider</span><span>Groq (Free)</span></div>
+              <div class="about-row"><span>Web Search</span><span>Tavily / DuckDuckGo</span></div>
+              <div class="about-row"><span>URL Reader</span><span>Jina AI (Free)</span></div>
+              <div class="about-row"><span>Code Execution</span><span>Pyodide (WebAssembly)</span></div>
+              <div class="about-row"><span>Icons</span><span>Tabler Icons</span></div>
+              <div class="about-row"><span>Font</span><span>JetBrains Mono + Inter</span></div>
+            </div>
+          </div>
+
+        </div><!-- end panels -->
+      </div><!-- end layout -->
+
+      <div class="modal-footer">
+        <button class="modal-btn modal-btn-secondary" onclick="closeSettings()">Cancel</button>
+        <button class="modal-btn modal-btn-primary" onclick="saveSettings()"><i class="ti ti-check"></i> Save Settings</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- API Key Required modal (minimal, shown on first load only) -->
   <div id="api-key-modal" class="modal-overlay" style="display:none">
     <div class="modal">
       <div class="modal-header">
-        <div class="modal-title">API Key Required</div>
+        <div class="modal-title">Welcome to AvinashGPT 👋</div>
         <button class="modal-close" onclick="closeApiKeyModal()"><i class="ti ti-x"></i></button>
       </div>
       <div class="modal-body">
-        <p>Enter your <strong>Groq API key</strong> to use AvinashGPT.</p>
-        <p style="color:var(--text-muted);font-size:12px;margin:4px 0 10px;">Get one at <a href="https://console.groq.com/keys" target="_blank" style="color:var(--accent)">console.groq.com/keys</a></p>
-        <input type="password" id="api-key-input" placeholder="gsk_..." style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid var(--border-hover);background:var(--bg-input);color:var(--text-primary);font-family:var(--font-sans);font-size:13px;" />
-        <div id="api-key-error" style="color:#f87171;font-size:12px;margin-top:4px;display:none">Please enter a valid API key.</div>
+        <p>Enter your <strong>Groq API key</strong> to get started.</p>
+        <p style="color:var(--text-muted);font-size:12px;margin:4px 0 12px;">Free key at <a href="https://console.groq.com/keys" target="_blank" style="color:var(--accent)">console.groq.com/keys</a></p>
+        <input type="password" id="quick-api-key-input" placeholder="gsk_..." style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid var(--border-hover);background:var(--bg-input);color:var(--text-primary);font-family:var(--font-sans);font-size:13px;" />
+        <div id="quick-api-key-error" style="color:#f87171;font-size:12px;margin-top:4px;display:none">Please enter a valid key (starts with gsk_)</div>
       </div>
       <div class="modal-footer">
-        <button class="modal-btn modal-btn-secondary" onclick="closeApiKeyModal()">Cancel</button>
-        <button class="modal-btn modal-btn-primary" onclick="saveApiKey()">Save Key</button>
+        <button class="modal-btn modal-btn-secondary" onclick="closeApiKeyModal()">Skip</button>
+        <button class="modal-btn modal-btn-primary" onclick="saveQuickApiKey()">Get Started</button>
       </div>
     </div>
   </div>
