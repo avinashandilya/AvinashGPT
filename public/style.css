@@ -103,7 +103,7 @@ body.light::before {
 }
 
 .sidebar-header {
-  padding: 18px 14px 14px;
+  padding: 18px 14px 14px 80px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
@@ -257,22 +257,24 @@ body.light::before {
   height: 50px;
   display: flex;
   align-items: center;
-  padding: 0 12px;
+  padding: 0 12px 0 70px;
   border-bottom: 1px solid var(--border);
   background: rgba(10,10,11,0.8);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   gap: 6px;
   flex-shrink: 0;
+  -webkit-app-region: drag;
 }
-#sidebar-toggle, #clear-btn, #api-key-btn, #theme-toggle, #export-btn {
+#sidebar-toggle, #clear-btn, #api-key-btn, #theme-toggle, #export-btn, #settings-btn {
   background: transparent; border: none; cursor: pointer;
   color: var(--text-muted); font-size: 17px;
   width: 32px; height: 32px; border-radius: var(--radius-sm);
   display: flex; align-items: center; justify-content: center;
   transition: all 0.2s ease;
+  -webkit-app-region: no-drag;
 }
-#sidebar-toggle:hover, #clear-btn:hover, #api-key-btn:hover, #theme-toggle:hover, #export-btn:hover {
+#sidebar-toggle:hover, #clear-btn:hover, #api-key-btn:hover, #theme-toggle:hover, #export-btn:hover, #settings-btn:hover {
   background: rgba(129,140,248,0.1);
   color: var(--accent);
 }
@@ -289,6 +291,7 @@ body.light::before {
   cursor: pointer;
   transition: all 0.2s;
   max-width: 120px;
+  -webkit-app-region: no-drag;
 }
 #model-select:hover { color: var(--text-primary); border-color: var(--accent); }
 #model-select option { background: var(--bg-sidebar); color: var(--text-primary); }
@@ -530,62 +533,35 @@ body.light::before {
   color: #c4b5fd;
 }
 
-/* ─── Syntax highlighting themes ─── */
-.code-wrap.lang-python pre, .code-wrap.lang-pyspark pre { background: #2B2B2B; color: #A9B7C6; }
-.code-wrap.lang-sql pre { background: #1E1E1E; color: #D4D4D4; }
-.code-wrap.lang-javascript pre, .code-wrap.lang-js pre { background: #1e1e1e; color: #d4d4d4; }
-.code-wrap.lang-typescript pre, .code-wrap.lang-ts pre { background: #1e1e1e; color: #d4d4d4; }
-.code-wrap.lang-bash pre, .code-wrap.lang-sh pre { background: #0d1117; color: #d4d4d4; }
-.code-wrap.lang-go pre, .code-wrap.lang-golang pre { background: #1e1e1e; color: #d4d4d4; }
-.code-wrap.lang-rust pre, .code-wrap.lang-rs pre { background: #1e1e1e; color: #d4d4d4; }
+/* ─── Table styles inside messages ─── */
+.message-bubble table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 13px;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.message-bubble th {
+  background: var(--accent);
+  color: #fff;
+  padding: 10px 14px;
+  text-align: left;
+  font-weight: 600;
+}
+.message-bubble td {
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.message-bubble tr:nth-child(even) td {
+  background: rgba(255,255,255,0.03);
+}
+.message-bubble tr:hover td {
+  background: rgba(124,58,237,0.08);
+}
 
-.pyc-comment  { color: #808080; font-style: italic; }
-.pyc-string   { color: #6A8759; }
-.pyc-number   { color: #6897BB; }
-.pyc-keyword  { color: #CC7832; }
-.pyc-function { color: #FFC66D; }
-
-.ssms-comment    { color: #6A9955; font-style: italic; }
-.ssms-string     { color: #CE9178; }
-.ssms-number     { color: #B5CEA8; }
-.ssms-keyword    { color: #569CD6; font-weight: 500; }
-.ssms-function   { color: #DCDCAA; }
-.ssms-identifier { color: #4EC9B0; }
-
-/* IMPROVED: JS/TS theme (VS Code Dark) */
-.jsts-comment  { color: #6A9955; font-style: italic; }
-.jsts-string   { color: #CE9178; }
-.jsts-number   { color: #B5CEA8; }
-.jsts-keyword  { color: #569CD6; font-weight: 500; }
-.jsts-function { color: #DCDCAA; }
-.jsts-builtin  { color: #4EC9B0; }
-
-/* IMPROVED: Bash theme */
-.bash-comment  { color: #6A9955; font-style: italic; }
-.bash-string   { color: #CE9178; }
-.bash-number   { color: #B5CEA8; }
-.bash-keyword  { color: #569CD6; font-weight: 500; }
-.bash-builtin  { color: #4EC9B0; }
-.bash-variable { color: #9CDCFE; }
-
-/* IMPROVED: Go theme */
-.go-comment   { color: #6A9955; font-style: italic; }
-.go-string    { color: #CE9178; }
-.go-number    { color: #B5CEA8; }
-.go-keyword   { color: #569CD6; font-weight: 500; }
-.go-function  { color: #DCDCAA; }
-.go-builtin   { color: #4EC9B0; }
-.go-type      { color: #4EC9B0; }
-
-/* IMPROVED: Rust theme */
-.rs-comment   { color: #6A9955; font-style: italic; }
-.rs-string    { color: #CE9178; }
-.rs-number    { color: #B5CEA8; }
-.rs-keyword   { color: #569CD6; font-weight: 500; }
-.rs-function  { color: #DCDCAA; }
-.rs-builtin   { color: #4EC9B0; }
-.rs-macro     { color: #DCDCAA; }
-.rs-lifetime  { color: #9CDCFE; }
+/* ─── Syntax highlighting via highlight.js ─── */
+/* Pre backgrounds cleared — highlight.js atom-one-dark handles them */
 
 .key-takeaway {
   margin-top: 10px;
@@ -595,6 +571,59 @@ body.light::before {
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   font-size: 12.5px;
   color: #86efac;
+}
+
+/* ─── Chat search input ─── */
+.chat-search-input {
+  width: calc(100% - 16px);
+  margin: 2px 8px 6px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-hover);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.chat-search-input:focus { border-color: var(--accent); }
+.chat-search-input::placeholder { color: var(--text-muted); }
+
+/* ─── Timestamp below messages ─── */
+.msg-timestamp {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 6px;
+  opacity: 0.6;
+  letter-spacing: 0.02em;
+}
+
+/* ─── Token progress bar ─── */
+#token-progress {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  max-width: 160px;
+}
+#token-progress-bar {
+  position: absolute;
+  inset: 0;
+  border-radius: 4px;
+  transition: width 0.3s ease, background 0.3s ease;
+  opacity: 0.2;
+}
+#token-progress-bar.ok { background: var(--green); }
+#token-progress-bar.warning { background: #f59e0b; }
+#token-progress-bar.danger { background: #f87171; }
+#char-counter {
+  position: relative;
+  z-index: 1;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
 }
 
 /* ─── Input Area ─── */
@@ -697,21 +726,15 @@ body.light::before {
 #send-btn i { color: #fff; font-size: 16px; }
 #send-btn:disabled { background: var(--bg-tag); cursor: not-allowed; box-shadow: none; }
 
-/* IMPROVED: Character counter & footer */
+/* IMPROVED: Token progress bar & footer */
 #input-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-top: 4px;
   padding: 0 4px;
+  gap: 12px;
 }
-#char-counter {
-  font-size: 10.5px;
-  color: var(--text-muted);
-  letter-spacing: 0.02em;
-}
-#char-counter.near-limit { color: #f59e0b; }
-#char-counter.over-limit { color: #f87171; }
 #footer-note {
   font-size: 10.5px;
   color: var(--text-muted);
