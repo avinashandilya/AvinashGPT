@@ -75,7 +75,15 @@ After a tool result is shown, continue with your analysis.
 
 FORMATTING: Same as normal mode — code blocks, numbered steps, Key Takeaway at end.`;
 
-/* ─── State ─── */
+/* ─── State & Constants ─── */
+const ALLOWED_MODELS = [
+  'meta-llama/llama-4-scout-17b-16e-instruct',
+  'meta-llama/llama-4-maverick-17b-128e-instruct',
+  'llama3-70b-8192',
+  'gemma2-9b-it',
+  'compound-beta'
+];
+const DEFAULT_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
 let conversationHistory = [];
 let isLoading = false;
 let currentAttachments = [];
@@ -374,7 +382,7 @@ window.openSettings = function() {
   document.getElementById('tavily-key-input').value = localStorage.getItem('tavily_api_key') || '';
 
   // Model cards
-  const currentModel = modelSelect?.value || 'meta-llama/llama-4-scout-17b-16e-instruct';
+  const currentModel = modelSelect?.value || DEFAULT_MODEL;
   document.querySelectorAll('.model-card').forEach(card => {
     card.classList.toggle('active', card.dataset.model === currentModel);
   });
@@ -445,6 +453,8 @@ window.saveSettings = function() {
     modelSelect.value = selectedModel;
     localStorage.setItem('selected_model', selectedModel);
   }
+  // Also update progress bar max from selected model's context window
+  updateProgressBar();
 
   // Sliders
   const maxTokens = parseInt(document.getElementById('max-tokens-slider').value);
@@ -585,10 +595,15 @@ themeToggle?.addEventListener('click', () => {
   themeToggle.innerHTML = isLight ? '<i class="ti ti-moon"></i>' : '<i class="ti ti-sun"></i>';
 });
 
-/* ─── Model selector (IMPROVED) ─── */
+/* ─── Model selector with stale-key validation ─── */
 function loadModel() {
   const saved = localStorage.getItem('selected_model');
-  if (saved && modelSelect) modelSelect.value = saved;
+  if (saved && ALLOWED_MODELS.includes(saved) && modelSelect) {
+    modelSelect.value = saved;
+  } else {
+    if (saved) localStorage.removeItem('selected_model');
+    if (modelSelect) modelSelect.value = DEFAULT_MODEL;
+  }
 }
 loadModel();
 modelSelect?.addEventListener('change', () => {
@@ -622,10 +637,11 @@ function loadChatHistory() {
   const chats = JSON.parse(localStorage.getItem('chat_history') || '[]');
   const list = document.getElementById('recent-chats-list');
   const section = document.getElementById('recent-chats-section');
+  const query = (document.getElementById('chat-search-input')?.value || '').toLowerCase();
   list.innerHTML = '';
   if (chats.length === 0) { section.style.display = 'none'; return; }
   section.style.display = 'block';
-  chats.forEach(chat => {
+  chats.filter(chat => !query || chat.title.toLowerCase().includes(query)).forEach(chat => {
     const btn = document.createElement('button');
     btn.className = 'chat-history-item';
     btn.innerHTML = '<i class="ti ti-message"></i>' + escapeHtml(chat.title) +
@@ -673,6 +689,7 @@ function restoreChat(id) {
   if (chat.model) modelSelect.value = chat.model;
   messagesEl.innerHTML = '';
   removeAttachment();
+  updateChatTitle();
   conversationHistory.forEach(msg => {
     if (msg.role === 'user') {
       const html = renderBubbleContent(msg.content);
@@ -682,6 +699,7 @@ function restoreChat(id) {
     }
   });
   if (!conversationHistory.length) appendWelcome();
+  highlightCodeBlocks();
 }
 
 function deleteChat(id) {
@@ -830,6 +848,21 @@ function getFileIcon(filename) {
   return icons[ext] || 'ti-file';
 }
 
+/* ─── Window title ─── */
+function updateChatTitle() {
+  if (conversationHistory.length) {
+    const firstUser = conversationHistory.find(m => m.role === 'user');
+    if (firstUser) {
+      const t = typeof firstUser.content === 'string' ? firstUser.content :
+        (Array.isArray(firstUser.content) ? firstUser.content.find(b => b.type === 'text')?.text || '' : '');
+      const title = t.substring(0, 30) + (t.length > 30 ? '...' : '');
+      document.title = title + ' — AvinashGPT';
+      return;
+    }
+  }
+  document.title = 'AvinashGPT — AI Coding Assistant';
+}
+
 /* ─── New chat / Clear ─── */
 function resetChat() {
   conversationHistory = [];
@@ -841,18 +874,31 @@ function resetChat() {
   if (previewArea) { previewArea.style.display = 'none'; previewArea.innerHTML = ''; }
   appendWelcome();
   if (messagesEl) messagesEl.scrollTop = 0;
+  updateChatTitle();
 }
 newChatBtn?.addEventListener('click', resetChat);
 clearBtn?.addEventListener('click', resetChat);
 
-/* ─── Character counter (IMPROVED) ─── */
+/* ─── Token progress bar ─── */
+function updateProgressBar() {
+  const len = inputEl ? inputEl.value.length : 0;
+  if (!charCounter) return;
+  const maxTokens = 4000;
+  const pct = Math.min(100, Math.round((len / maxTokens) * 100));
+  const bar = document.getElementById('token-progress-bar');
+  if (bar) {
+    bar.style.width = pct + '%';
+    bar.className = '';
+    if (pct > 90) bar.classList.add('danger');
+    else if (pct > 70) bar.classList.add('warning');
+    else bar.classList.add('ok');
+  }
+  charCounter.textContent = len + ' / ' + maxTokens;
+}
 inputEl?.addEventListener('input', () => {
   const len = inputEl.value.length;
-  charCounter.textContent = len + ' / 4000';
-  charCounter.className = '';
-  if (len > 3800) charCounter.classList.add('near-limit');
-  if (len > 4000) charCounter.classList.add('over-limit');
   if (len > 4000) inputEl.value = inputEl.value.substring(0, 4000);
+  updateProgressBar();
   debounceResize();
 });
 
@@ -865,6 +911,26 @@ function debounceResize() {
     inputEl.style.height = Math.min(inputEl.scrollHeight, 140) + 'px';
   }, 50);
 }
+
+/* ─── Keyboard shortcuts ─── */
+document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
+    e.preventDefault();
+    resetChat();
+  }
+  if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+    e.preventDefault();
+    const searchInput = document.getElementById('chat-search-input');
+    if (searchInput) { searchInput.focus(); searchInput.select(); }
+  }
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+    e.preventDefault();
+    handleSend();
+  }
+});
+
+/* ─── Chat search filter ─── */
+document.getElementById('chat-search-input')?.addEventListener('input', loadChatHistory);
 
 /* ─── Send on Enter (Shift+Enter = newline) ─── */
 inputEl?.addEventListener('keydown', e => {
@@ -909,18 +975,20 @@ function appendWelcome() {
   messagesEl.appendChild(div);
 }
 
-/* ─── Add message bubble ─── */
+/* ─── Add message bubble (with timestamp) ─── */
 function addMessage(role, htmlContent) {
   if (!messagesEl) { console.warn('addMessage: messagesEl is null'); return null; }
   const div = document.createElement('div');
   div.className = 'message ' + role;
+  const now = new Date();
+  const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const initials = role === 'user' ? 'AK' : 'A';
-  div.innerHTML = '<div class="message-avatar">' + initials + '</div><div class="message-bubble">' + htmlContent + '</div>';
-  // Delay DOM access so innerHTML renders before any child query
+  div.innerHTML = '<div class="message-avatar">' + initials + '</div><div class="message-bubble">' + htmlContent + '<div class="msg-timestamp">' + timeStr + '</div></div>';
   requestAnimationFrame(() => {
     if (messagesEl) messagesEl.scrollTop = messagesEl.scrollHeight;
   });
   messagesEl.appendChild(div);
+  if (role === 'bot') highlightCodeBlocks(div);
   return div;
 }
 
@@ -958,83 +1026,63 @@ function streamReply(text, msgDiv) {
     if (!words.length) { resolve(); return; }
     const interval = setInterval(() => {
       displayed += (idx > 0 ? ' ' : '') + words[idx];
-      bubble.innerHTML = formatResponse(displayed) + '<span class="stream-cursor" style="animation:blink 0.6s step-end infinite">▌</span>';
+      bubble.innerHTML = (function() { try { return formatResponse(displayed); } catch(e) { return escapeHtml(displayed); } })() + '<span class="stream-cursor" style="animation:blink 0.6s step-end infinite">▌</span>';
       if (messagesEl) messagesEl.scrollTop = messagesEl.scrollHeight;
       idx++;
       if (idx >= words.length) {
         clearInterval(interval);
-        bubble.innerHTML = formatResponse(text);
+        try { bubble.innerHTML = formatResponse(text); highlightCodeBlocks(bubble); } catch(e) { bubble.innerHTML = escapeHtml(text); }
         resolve();
       }
     }, Math.max(8, Math.min(30, 5000 / words.length)));
   });
 }
 
-/* ─── Format markdown-ish response to HTML ─── */
+/* ─── Format markdown to HTML via marked + highlight.js ─── */
 function formatResponse(text) {
-  let html = escapeHtml(text);
-
-  // Extract code blocks and replace with placeholders
-  const codeBlocks = [];
-  html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
-    const label = lang || 'code';
-    const rawCode = code.trim();
-    const safeCode = highlightCode(rawCode, lang);
-    const id = 'cb-' + Math.random().toString(36).slice(2, 8);
-    const l = lang.toLowerCase();
-    const supportedLangs = ['python', 'pyspark', 'sql', 'javascript', 'js', 'typescript', 'ts', 'bash', 'sh', 'go', 'golang', 'rust', 'rs'];
-    const langCls = supportedLangs.includes(l) ? ' lang-' + l : '';
-    const block =
-      '<div class="code-wrap' + langCls + '">' +
+  try {
+    const renderer = new marked.Renderer();
+    renderer.code = function({ text: codeText, lang }) {
+      const label = lang || 'code';
+      const rawCode = codeText;
+      let safeCode;
+      try {
+        if (typeof hljs !== 'undefined') {
+          if (lang && hljs.getLanguage(lang)) {
+            safeCode = hljs.highlight(rawCode, { language: lang }).value;
+          } else {
+            safeCode = hljs.highlightAuto(rawCode).value;
+          }
+        } else {
+          safeCode = escapeHtml(rawCode);
+        }
+      } catch(e) {
+        safeCode = escapeHtml(rawCode);
+      }
+      const id = 'cb-' + Math.random().toString(36).slice(2, 8);
+      const l = (lang || '').toLowerCase();
+      const langCls = ' lang-' + l;
+      return '<div class="code-wrap' + langCls + '">' +
         '<div class="code-header">' +
           '<span class="code-lang">' + label + '</span>' +
           '<button class="copy-btn" onclick="copyCode(\'' + id + '\')"><i class="ti ti-copy"></i> Copy</button>' +
         '</div>' +
-        '<pre id="' + id + '" data-raw="' + escapeAttr(rawCode) + '">' + safeCode + '</pre>' +
-      '</div>';
-    const idx = codeBlocks.length;
-    codeBlocks.push(block);
-    return '%%CB' + idx + '%%';
+        '<pre id="' + id + '" data-raw="' + escapeAttr(rawCode) + '"><code class="language-' + label.toLowerCase() + '">' + safeCode + '</code></pre>' +
+      '</div>\n';
+    };
+    let html = marked.parse(text, { renderer, breaks: true, gfm: true });
+    html = html.replace(/💡 <strong>Key Takeaway:<\/strong>\s*(.+?)(?:<\/p>|$)/g, '<div class="key-takeaway">💡 <strong>Key Takeaway:</strong> $1</div>');
+    return html;
+  } catch (e) {
+    return escapeHtml(text);
+  }
+}
+
+/* ─── Highlight code blocks in DOM via highlight.js ─── */
+function highlightCodeBlocks(container) {
+  (container || document).querySelectorAll('.message-bubble pre code').forEach((block) => {
+    try { hljs.highlightElement(block); } catch(e) { /* silent */ }
   });
-
-  // Process line by line with if/else priority (each line matches one pattern)
-  const lines = html.split('\n');
-  html = lines.map(function(line) {
-    // Preserve code block placeholders
-    var t = line.trim();
-    if (/^%%CB\d+%%$/.test(t)) return line;
-
-    // Block-level patterns (mutually exclusive, first match wins)
-    if (/^### /.test(line)) {
-      return line.replace(/^### (.+)/, '<p style="font-weight:600;font-size:13px;margin:10px 0 4px;color:#a1a1aa;">$1</p>');
-    }
-    if (/^## /.test(line)) {
-      return line.replace(/^## (.+)/, '<p style="font-weight:600;font-size:14px;margin:12px 0 5px;">$1</p>');
-    }
-    if (/^---$/.test(line)) {
-      return '<hr style="border:none;border-top:0.5px solid rgba(255,255,255,0.08);margin:10px 0;">';
-    }
-    if (/^\d+\.\s/.test(line)) {
-      return line.replace(/^(\d+)\.\s(.+)/, '<p style="margin:4px 0;"><strong>$1.</strong> $2</p>');
-    }
-    if (/💡 Key Takeaway:/.test(line)) {
-      var content = line.replace(/^💡 Key Takeaway:\s*/, '');
-      content = content.replace(/`([^`\n]+)`/g, function(_, m) { return '<code>' + m + '</code>'; });
-      content = content.replace(/\*\*(.+?)\*\*/g, function(_, m) { return '<strong>' + m + '</strong>'; });
-      return '<div class="key-takeaway">💡 <strong>Key Takeaway:</strong> ' + content + '</div>';
-    }
-
-    // Inline patterns (only for lines not matched by block-level above)
-    line = line.replace(/`([^`\n]+)`/g, '<code>$1</code>');
-    line = line.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    return line;
-  }).join('\n');
-
-  // Restore code blocks
-  html = html.replace(/%%CB(\d+)%%/g, function(_, idx) { return codeBlocks[parseInt(idx)] || ''; });
-
-  html = html.replace(/\n\n/g, '<br><br>').replace(/\n/g, '<br>');
-  return html;
 }
 
 /* IMPROVED: Copy code uses data-raw */
@@ -1070,104 +1118,7 @@ exportBtn?.addEventListener('click', () => {
   URL.revokeObjectURL(url);
 });
 
-/* ─── Syntax highlighting ─── */
-function highlightCode(code, lang) {
-  const l = (lang || '').toLowerCase();
-  if (['python', 'pyspark', 'py'].includes(l)) return highlightPyCharm(code);
-  if (l === 'sql') return highlightSSMS(code);
-  if (['javascript', 'js', 'typescript', 'ts'].includes(l)) return highlightJSTS(code);
-  if (['bash', 'sh'].includes(l)) return highlightBash(code);
-  if (['go', 'golang'].includes(l)) return highlightGo(code);
-  if (['rust', 'rs'].includes(l)) return highlightRust(code);
-  return code;
-}
-
-function tokenize(code, patterns) {
-  const src = patterns.map(p => '(' + p[0].source + ')').join('|');
-  if (!src) return code;
-  const allFlags = [...new Set(patterns.flatMap(p => [...p[0].flags]))].join('');
-  const re = new RegExp(src, allFlags);
-  return code.replace(re, function(...args) {
-    for (let i = 0; i < patterns.length; i++) {
-      if (args[i + 1] !== undefined) {
-        return '<span class="' + patterns[i][1] + '">' + args[i + 1] + '</span>';
-      }
-    }
-    return args[0];
-  });
-}
-
-function highlightPyCharm(code) {
-  return tokenize(code, [
-    [/(?:"""[\s\S]*?"""|'''[\s\S]*?'''|"[^"]*"|'(?:(?!')[\s\S])*')/g, 'pyc-string'],
-    [/(#.*)$/gm, 'pyc-comment'],
-    [/\b\d+\.?\d*\b/g, 'pyc-number'],
-    [/\b(from|import|def|class|return|if|else|elif|for|while|try|except|finally|with|as|pass|break|continue|and|or|not|in|is|None|True|False|lambda|yield|raise|self|async|await|print|range|len|type|int|str|list|dict|set|tuple|bool|float|map|filter|zip|enumerate|sorted|open|input|super|global|nonlocal|del|assert|match|case)\b/g, 'pyc-keyword'],
-    [/\b\w+(?=\s*\()/g, 'pyc-function'],
-  ]);
-}
-
-function highlightSSMS(code) {
-  return tokenize(code, [
-    [/(--.*)$/gm, 'ssms-comment'],
-    [/'(?:(?!')[\s\S])*'/g, 'ssms-string'],
-    [/\b\d+\.?\d*\b/g, 'ssms-number'],
-    [/\b(SELECT|FROM|WHERE|JOIN|LEFT|RIGHT|INNER|OUTER|CROSS|FULL|ON|GROUP|BY|ORDER|HAVING|INSERT|INTO|VALUES|UPDATE|SET|DELETE|CREATE|TABLE|ALTER|DROP|AND|OR|NOT|IN|BETWEEN|LIKE|IS|NULL|AS|DISTINCT|CASE|WHEN|THEN|ELSE|END|UNION|ALL|EXISTS|LIMIT|OFFSET|TOP|DESC|ASC|WITH|RECURSIVE|OVER|PARTITION|ROW_NUMBER|RANK|DENSE_RANK|NTILE|LAG|LEAD|FIRST_VALUE|LAST_VALUE|COALESCE|CAST|CONVERT|IIF|NVL|IFNULL|NULLIF)\b/gi, 'ssms-keyword'],
-    [/\b\w+(?=\s*\()/g, 'ssms-function'],
-    [/\b\w+\b/g, 'ssms-identifier'],
-  ]);
-}
-
-/* IMPROVED: JS/TS highlighting */
-function highlightJSTS(code) {
-  return tokenize(code, [
-    [/(?:\/\/.*$|\/\*[\s\S]*?\*\/)/gm, 'jsts-comment'],
-    [/(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)/g, 'jsts-string'],
-    [/\b\d+\.?\d*\b/g, 'jsts-number'],
-    [/\b(const|let|var|function|return|if|else|for|while|do|switch|case|break|continue|new|this|typeof|instanceof|void|delete|import|export|default|from|as|class|extends|super|async|await|yield|throw|try|catch|finally|in|of|true|false|null|undefined|NaN)\b/g, 'jsts-keyword'],
-    [/\b\w+(?=\s*\()/g, 'jsts-function'],
-    [/\b(console|Math|JSON|Promise|Array|Object|String|Number|Boolean|Date|RegExp|Map|Set|Symbol|Error|parseInt|parseFloat|isNaN|fetch|localStorage|sessionStorage|document|window)\b/g, 'jsts-builtin'],
-  ]);
-}
-
-/* IMPROVED: Bash highlighting */
-function highlightBash(code) {
-  return tokenize(code, [
-    [/(#.*)$/gm, 'bash-comment'],
-    [/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, 'bash-string'],
-    [/\b\d+\.?\d*\b/g, 'bash-number'],
-    [/\b(if|then|else|elif|fi|for|while|do|done|case|esac|in|function|return|local|export|source|\.|exit|break|continue|select|until)\b/g, 'bash-keyword'],
-    [/\$\{?\w+\}?/g, 'bash-variable'],
-    [/\b(echo|printf|cd|ls|cat|grep|sed|awk|find|xargs|rm|cp|mv|mkdir|chmod|chown|sudo|apt|yum|npm|pip|docker|kubectl|git|curl|wget|sort|uniq|wc|head|tail|tee|cut|tr)\b/g, 'bash-builtin'],
-  ]);
-}
-
-/* IMPROVED: Go highlighting */
-function highlightGo(code) {
-  return tokenize(code, [
-    [/(?:\/\/.*$|\/\*[\s\S]*?\*\/)/gm, 'go-comment'],
-    [/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`[^`]*`/g, 'go-string'],
-    [/\b\d+\.?\d*\b/g, 'go-number'],
-    [/\b(package|import|func|return|if|else|for|range|switch|case|break|continue|go|defer|select|chan|map|struct|interface|type|var|const|fallthrough|default)\b/g, 'go-keyword'],
-    [/\b\w+(?=\s*\()/g, 'go-function'],
-    [/\b(byte|rune|string|int|int8|int16|int32|int64|uint|uint8|uint16|uint32|uint64|float32|float64|bool|complex64|complex128|error|nil|true|false|iota|append|copy|close|delete|len|cap|make|new|panic|recover|print|println|fmt|log|http|json|os|io|ioutil|strconv|strings|bytes|time|sync|atomic)\b/g, 'go-builtin'],
-    [/\b(bool|byte|complex128|complex64|error|float32|float64|int|int16|int32|int64|int8|rune|string|uint|uint16|uint32|uint64|uint8|uintptr)\b/g, 'go-type'],
-  ]);
-}
-
-/* IMPROVED: Rust highlighting */
-function highlightRust(code) {
-  return tokenize(code, [
-    [/(?:\/\/.*$|\/\*[\s\S]*?\*\/)/gm, 'rs-comment'],
-    [/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, 'rs-string'],
-    [/\b\d+\.?\d*\b/g, 'rs-number'],
-    [/\b(fn|let|mut|const|static|if|else|for|while|loop|match|return|break|continue|impl|trait|struct|enum|pub|use|mod|crate|self|super|where|as|in|ref|move|async|await|unsafe|extern|type|dyn|abstract|override|final|macro_rules)\b/g, 'rs-keyword'],
-    [/\b\w+(?=\s*\()/g, 'rs-function'],
-    [/\b(i8|i16|i32|i64|i128|isize|u8|u16|u32|u64|u128|usize|f32|f64|bool|char|str|String|Vec|HashMap|HashSet|Option|Result|Box|Rc|Arc|Cell|RefCell|Mutex|RwLock|Path|PathBuf|OsString|OsStr|CString|CStr|Duration|Instant|SystemTime|true|false|Some|None|Ok|Err|panic|assert|assert_eq|println|eprintln|format|vec|vec!|format!|println!|eprintln!|panic!|unimplemented!|todo!|unreachable!|matches!|include_str!|include_bytes!|stringify!|compile_error!|concat!|env!|option_env!|cfg!|file!|line!|column!)\b/g, 'rs-builtin'],
-    [/'\w+/g, 'rs-lifetime'],
-    [/\b\w+!/g, 'rs-macro'],
-  ]);
-}
+/* ─── Syntax highlighting via highlight.js (loaded from CDN) ─── */
 
 /* ─── Main send handler (IMPROVED: regenerate, content blocks, rate limit) ─── */
 async function handleSend(isRegenerate) {
@@ -1280,6 +1231,7 @@ async function handleSend(isRegenerate) {
     const bubbleEl = msgDiv?.querySelector('.message-bubble');
     if (bubbleEl) bubbleEl.appendChild(actions);
     saveChatHistory();
+    updateChatTitle();
     extractMemories();
 
   } catch (err) {
@@ -1460,6 +1412,8 @@ document.addEventListener('DOMContentLoaded', () => {
     appendWelcome();
     loadChatHistory();
     applySettings(getSettings());
+    updateProgressBar();
+    highlightCodeBlocks();
   } catch (e) {
     console.error('AvinashGPT init error:', e);
   }

@@ -7,6 +7,9 @@
   <link rel="stylesheet" href="public/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.8.0/dist/tabler-icons.min.css" />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
 </head>
 <body>
@@ -63,6 +66,7 @@
       <!-- Recent Chats -->
       <div id="recent-chats-section" style="display:none">
         <div class="sidebar-section-label">Recent Chats</div>
+        <input type="text" id="chat-search-input" class="chat-search-input" placeholder="Search chats..." />
         <div id="recent-chats-list"></div>
       </div>
 
@@ -120,11 +124,13 @@
           <div class="status-dot" id="status-dot"></div>
           <span id="status-text">AvinashGPT is online</span>
         </div>
-        <!-- IMPROVED: Model selector -->
+        <!-- Model selector -->
         <select id="model-select" title="Select model">
-          <option value="meta-llama/llama-4-scout-17b-16e-instruct">Llama-4 Scout (vision)</option>
-          <option value="llama-3.3-70b-versatile">Llama-3.3 70B (text)</option>
-          <option value="llama-3.1-8b-instant">Llama-3.1 8B (fast)</option>
+          <option value="meta-llama/llama-4-scout-17b-16e-instruct">Llama-4 Scout</option>
+          <option value="meta-llama/llama-4-maverick-17b-128e-instruct">Llama-4 Maverick</option>
+          <option value="llama3-70b-8192">Llama 3 70B</option>
+          <option value="gemma2-9b-it">Gemma 2 9B</option>
+          <option value="compound-beta">Compound Beta</option>
         </select>
         <!-- IMPROVED: Theme toggle -->
         <button id="theme-toggle" title="Toggle theme"><i class="ti ti-sun"></i></button>
@@ -167,9 +173,12 @@
             <i class="ti ti-arrow-up"></i>
           </button>
         </div>
-        <!-- IMPROVED: Character counter -->
+        <!-- Token progress bar -->
         <div id="input-footer">
-          <span id="char-counter">0 / 4000</span>
+          <div id="token-progress">
+            <div id="token-progress-bar" style="width:0%"></div>
+            <span id="char-counter">0 / 4000</span>
+          </div>
           <span id="footer-note">AvinashGPT · Powered by Groq</span>
         </div>
       </div>
@@ -228,18 +237,28 @@
             <div class="model-cards" id="settings-model-cards">
               <div class="model-card" data-model="meta-llama/llama-4-scout-17b-16e-instruct">
                 <div class="model-card-name">Llama 4 Scout</div>
-                <div class="model-card-desc">Best for vision & images. Multimodal, fast.</div>
-                <div class="model-card-tags"><span>Vision</span><span>Fast</span><span>Free</span></div>
+                <div class="model-card-desc">Fast vision model, great all-rounder.</div>
+                <div class="model-card-tags"><span>Fast</span><span>Vision</span><span>Free</span></div>
               </div>
-              <div class="model-card" data-model="llama-3.3-70b-versatile">
-                <div class="model-card-name">Llama 3.3 70B</div>
-                <div class="model-card-desc">Best for complex reasoning and long code tasks.</div>
+              <div class="model-card" data-model="meta-llama/llama-4-maverick-17b-128e-instruct">
+                <div class="model-card-name">Llama 4 Maverick</div>
+                <div class="model-card-desc">Large 128-expert MoE, best for complex reasoning.</div>
+                <div class="model-card-tags"><span>MoE</span><span>Powerful</span><span>Free</span></div>
+              </div>
+              <div class="model-card" data-model="llama3-70b-8192">
+                <div class="model-card-name">Llama 3 70B</div>
+                <div class="model-card-desc">Proven workhorse for complex reasoning and code.</div>
                 <div class="model-card-tags"><span>Powerful</span><span>Reasoning</span><span>Free</span></div>
               </div>
-              <div class="model-card" data-model="llama-3.1-8b-instant">
-                <div class="model-card-name">Llama 3.1 8B</div>
-                <div class="model-card-desc">Fastest responses. Good for quick questions.</div>
-                <div class="model-card-tags"><span>Fast</span><span>Lightweight</span><span>Free</span></div>
+              <div class="model-card" data-model="gemma2-9b-it">
+                <div class="model-card-name">Gemma 2 9B</div>
+                <div class="model-card-desc">Google's efficient instruction-tuned model.</div>
+                <div class="model-card-tags"><span>Efficient</span><span>Lightweight</span><span>Free</span></div>
+              </div>
+              <div class="model-card" data-model="compound-beta">
+                <div class="model-card-name">Compound Beta</div>
+                <div class="model-card-desc">Experimental compound reasoning model.</div>
+                <div class="model-card-tags"><span>Experimental</span><span>Reasoning</span><span>Beta</span></div>
               </div>
             </div>
 

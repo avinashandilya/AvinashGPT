@@ -1,0 +1,59 @@
+{
+  "name": "avinashgpt",
+  "version": "4.0.0",
+  "description": "AvinashGPT — AI Coding Assistant (Desktop)",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "generate-icons": "node scripts/generate-icon.js",
+    "build": "npm run generate-icons && electron-builder",
+    "build:mac": "npm run generate-icons && electron-builder --mac",
+    "build:win": "npm run generate-icons && electron-builder --win",
+    "build:linux": "npm run generate-icons && electron-builder --linux"
+  },
+  "author": "Avinash Kumar",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.0"
+  },
+  "build": {
+    "appId": "com.avinash.avinashgpt",
+    "productName": "AvinashGPT",
+    "files": [
+      "main.js",
+      "preload.js",
+      "index.html",
+      "public/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "assets/icon.png",
+      "darkModeSupport": true
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "assets/icon.png"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development",
+      "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

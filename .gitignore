@@ -3,3 +3,12 @@ local.md
 .env.local
 *.env
 .DS_Store
+node_modules/
+dist/
+*.dmg
+*.zip
+*.exe
+*.AppImage
+*.deb
+*.snap
+release/
